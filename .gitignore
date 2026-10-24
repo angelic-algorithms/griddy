@@ -1,0 +1,13 @@
+# Take videos and Griddy's memory file stay on your machine
+*.mov
+*.mp4
+griddy_data.json
+griddy_command.json
+griddy_result.json
+
+# Old generated copy of the patch (Griddy.amxd is the real one)
+Griddy.maxpat
+
+# macOS
+.DS_Store
+._*
