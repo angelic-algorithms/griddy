@@ -11,7 +11,8 @@
 // Inlet messages:
 //   init, frame, jit_matrix <name>, restore <json>, select <i>,
 //   importvideo <path>, cleartake, folder <path>, offset <ms>,
-//   follow <0|1>, window <0|1>, fullscreen <0|1>, camera <name>
+//   follow <0|1>, window <0|1>, fullscreen <0|1>, camera <name>,
+//   colors <0|1>, bgswatch <i>, accentswatch <i>, bghex <hex>, accenthex <hex>
 // Outlets:
 //   0 state -> pattr   1 recorder -> jit.record   2 track menu
 //   3 status line      4 ui sync   5 camera -> jit.grab   6 camera menu
@@ -39,7 +40,24 @@ var CAM_TIMEOUT = 3000; // ms without a camera frame before we reconnect
 // camera:  the camera to open with this set
 // offsets: camera name -> video offset in ms (an iPhone over WiFi lags more
 //          than a capture card, so each camera keeps its own)
-var state = { folder: "", follow: 1, videos: {}, camera: "", offsets: {} };
+// bg:      "#RRGGBB" for the grid window and device panel ("" = Live's theme)
+// accent:  "#RRGGBB" for toggles and the Colors button ("" = Live's theme)
+var state = { folder: "", follow: 1, videos: {}, camera: "", offsets: {}, bg: "", accent: "" };
+
+// ---------- colors ----------
+// Same swatches as the Flow version. The patch's swatch buttons send
+// "bgswatch <i>" / "accentswatch <i>", so these lists are the only place
+// the palette lives.
+var BG_SWATCHES = ["#DCCFA6", "#8A9A70", "#D8A07A", "#C2CBD4", "#E9E3D2", "#1C1C1E", "#1C2836"];
+var ACCENT_SWATCHES = ["#166534", "#9F1239", "#EA580C", "#7C3AED", "#38BDF8", "#E5E7EB"];
+// Panel labels that switch between dark and light text to stay readable
+var LABELS = ["lbl_cam", "lbl_track", "lbl_offset", "lbl_window", "lbl_full", "lbl_follow",
+              "lbl_bgcol", "lbl_accent"];
+var TOGGLES = ["tog_window", "tog_full", "tog_follow"];
+// Everything inside the Colors drop down, hidden until Colors is clicked
+var COLOR_ROW = ["lbl_bgcol", "hex_bg", "lbl_accent", "hex_ac"];
+var colorsOpen = 0;
+var PATCH = this.patcher;
 
 // ---------- runtime ----------
 var ready = false;
@@ -103,6 +121,7 @@ function init() {
     if (!win) {
         win = new JitterObject("jit.window", CTX);
         win.size = [WIN_W, WIN_H];
+        win.title = "Griddy";
         win.visible = 1;
         render = new JitterObject("jit.gl.render", CTX);
         render.erase_color = [0, 0, 0, 1];
@@ -119,6 +138,9 @@ function init() {
     watch("tempo", function (v) { tempo = v; });
 
     loadData();
+    colors(colorsOpen);
+    uimsg("btn_colors", "set", colorsOpen);  // after Reload Engine, match the button
+    applyColors();
     ready = true;
     scanSet();
     pushUI();
@@ -807,6 +829,9 @@ function applyState(s) {
     if (s.offset && !state.offsets[s.camera || "default"]) state.offsets[s.camera || "default"] = Number(s.offset);
     var oldCam = state.camera;
     if (s.camera) state.camera = s.camera;
+    if (s.bg) state.bg = s.bg;
+    if (s.accent) state.accent = s.accent;
+    applyColors();
     pushUI();
     if (ready && state.camera && state.camera !== oldCam) openCamera();
 }
@@ -818,6 +843,104 @@ function pushUI() {
     outlet(OUT_UI, "offset", currentOffset());
     outlet(OUT_UI, "follow", state.follow);
     outlet(OUT_UI, "window", win ? 1 : 0);
+}
+
+// =====================================================================
+// Colors
+// =====================================================================
+function colors(v) {
+    colorsOpen = Number(v) ? 1 : 0;
+    var names = COLOR_ROW.slice(0);
+    for (var i = 0; i < BG_SWATCHES.length; i++) names.push("sw_bg_" + i);
+    for (var j = 0; j < ACCENT_SWATCHES.length; j++) names.push("sw_ac_" + j);
+    for (var k = 0; k < names.length; k++) {
+        var o = ui(names[k]);
+        if (o) o.hidden = colorsOpen ? 0 : 1;
+    }
+}
+
+function bgswatch(i) { setColor("bg", BG_SWATCHES[Number(i)]); }
+function accentswatch(i) { setColor("accent", ACCENT_SWATCHES[Number(i)]); }
+function bghex() { setColor("bg", parseHex(arrayfromargs(arguments))); }
+function accenthex() { setColor("accent", parseHex(arrayfromargs(arguments))); }
+
+function setColor(key, hex) {
+    if (!hex) { status("Type a color as six hex digits, like #C2CBD4"); applyColors(); return; }
+    state[key] = hex;
+    save();
+    applyColors();
+}
+
+// textedit sends "text #C2CBD4"; a hex like 000000 can arrive as the number 0
+function parseHex(args) {
+    for (var i = 0; i < args.length; i++) {
+        var a = args[i];
+        if (typeof a === "number") a = ("000000" + Math.round(a)).slice(-6);
+        var m = String(a).match(/^#?([0-9a-fA-F]{6})$/);
+        if (m) return "#" + m[1].toUpperCase();
+    }
+    return null;
+}
+
+function rgb(hex) {
+    var n = parseInt(hex.slice(1), 16);
+    return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
+}
+
+// Dark text on light backgrounds, light text on dark ones
+function contrast(c) {
+    var lum = 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2];
+    return lum > 0.55 ? [0.1, 0.1, 0.1] : [0.93, 0.93, 0.93];
+}
+
+function ui(name) { return PATCH ? PATCH.getnamed(name) : null; }
+
+function uimsg(name) {
+    var o = ui(name);
+    if (o) o.message.apply(o, arrayfromargs(arguments).slice(1));
+}
+
+function applyColors() {
+    var i, c;
+    var bg = state.bg ? rgb(state.bg) : null;
+    if (render) render.erase_color = bg ? [bg[0], bg[1], bg[2], 1] : [0, 0, 0, 1];
+
+    var panel = ui("bg_panel");
+    if (panel) {
+        panel.hidden = bg ? 0 : 1;
+        if (bg) panel.message("bgfillcolor", bg[0], bg[1], bg[2], 1);
+    }
+    var text = bg ? contrast(bg) : null;
+    if (text) for (i = 0; i < LABELS.length; i++) uimsg(LABELS[i], "textcolor", text[0], text[1], text[2], 1);
+
+    // paint the swatches from the lists above; the chosen one gets a ring
+    var ring = text || [0.93, 0.93, 0.93];
+    paintSwatches("sw_bg_", BG_SWATCHES, state.bg, ring);
+    paintSwatches("sw_ac_", ACCENT_SWATCHES, state.accent, ring);
+
+    if (state.accent) {
+        var a = rgb(state.accent);
+        for (i = 0; i < TOGGLES.length; i++) uimsg(TOGGLES[i], "checkedcolor", a[0], a[1], a[2], 1);
+        uimsg("btn_colors", "bgoncolor", a[0], a[1], a[2], 1);
+        uimsg("btn_colors", "bgoveroncolor", a[0], a[1], a[2], 1);
+        c = contrast(a);
+        uimsg("btn_colors", "textoncolor", c[0], c[1], c[2], 1);
+    }
+    uimsg("hex_bg", "set", state.bg || "");
+    uimsg("hex_ac", "set", state.accent || "");
+}
+
+function paintSwatches(prefix, list, chosen, ring) {
+    for (var i = 0; i < list.length; i++) {
+        var o = ui(prefix + i);
+        if (!o) continue;
+        var c = rgb(list[i]);
+        o.message("bgcolor", c[0], c[1], c[2], 1);
+        o.message("bgovercolor", c[0], c[1], c[2], 1);
+        var on = list[i] === chosen;
+        o.message("border", on ? 2 : 1);
+        o.message("bordercolor", on ? ring[0] : 0.4, on ? ring[1] : 0.4, on ? ring[2] : 0.4, 1);
+    }
 }
 
 // Clean up when the device is removed
