@@ -35,6 +35,7 @@ Live loads Griddy straight from this folder, so the repo is cloned into the User
 |---|---|
 | `griddy.js` | The engine. All the logic: reading the set, sync, recording, linking takes, the grid. Runs in Max's built in JavaScript engine (older JavaScript: use `var`, no arrow functions or classes). |
 | `Griddy.amxd` | The Max patch Live loads: camera, recorder, frame clock, buttons. Edit it in Max (edit button on the device) and save with Cmd+S. This file is the source of truth for the patch. |
+| `griddy_trash.js` | Small Node for Max helper that moves videos of deleted tracks to the Trash. |
 | `griddy_title.png` | The "Griddy" title on the device panel. Regenerate with `tools/make_title.swift` (font: Sedgwick Ave Display from Google Fonts). |
 | `docs/how-it-works.md` | Flowcharts of how the code works. |
 
@@ -53,6 +54,11 @@ Click **Colors** on the device to open the swatches. **Background** colors the g
 * `~/Music/Ableton/Griddy Takes/griddy_data.json` holds which video belongs to which clip, your camera, and offsets. It is keyed by each clip's audio file, so one file serves every set.
 * Take videos are saved into your chosen takes folder, otherwise the project folder, otherwise `~/Music/Ableton/Griddy Takes/`.
 * The home folder is set in `griddy.js` (`HOME`). Change it before using Griddy on another computer.
+
+## What shows in the grid
+
+* A track's tile hides while the track is muted, silenced by another track's solo, or has its volume fader all the way down. It comes back when you can hear the track again, and the other tiles resize to fill the space.
+* Deleting a track removes its tile right away. Its takes stay linked until you next start recording, so Cmd+Z brings everything back. When recording starts, Griddy forgets the deleted track's takes and moves their videos to the Trash (Put Back works). Clips you moved or copied to other tracks keep their videos. The first time, macOS asks to let Live control Finder; click OK.
 
 ## Known issues
 

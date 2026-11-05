@@ -9,6 +9,8 @@
 - Runs in Max's legacy `[js]` engine: ES5 only. Use `var`; no `let`/`const`,
   arrow functions, classes or template literals.
 - Check syntax with `node --check griddy.js`.
+- `griddy_trash.js` is the exception: it runs in Node for Max (`[node.script]`), so
+  modern JavaScript is fine there. It moves files to the Trash for `griddy.js`.
 - `autowatch` is 0 on purpose. After editing `griddy.js`, Christopher clicks
   **Reload Engine** on the device. After editing `Griddy.amxd`, he must reopen the Live set.
 
