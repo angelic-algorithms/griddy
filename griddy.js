@@ -92,6 +92,7 @@ var folderCache = {};  // folder -> { list, at }
 // Commands Claude can leave for Griddy (checked every couple of seconds)
 var CMD_FILE = HOME + "/Music/Ableton/Griddy Takes/griddy_command.json";
 var RESULT_FILE = HOME + "/Music/Ableton/Griddy Takes/griddy_result.json";
+var CMD_MAX_AGE = 600;  // seconds; older commands are ignored
 
 // The Griddy template: one track per part, one tile per track.
 // Colors are Live palette style RGB values.
@@ -626,6 +627,13 @@ function checkCommands() {
         if (!c.id || c.id === state.lastCmd) return;
         state.lastCmd = c.id;
         save();
+        // ids end in the unix time they were written; ignore anything stale
+        // so an old command file can't fire when a new set is opened
+        var m = String(c.id).match(/(\d{9,})$/);
+        if (!m || Date.now() / 1000 - Number(m[1]) > CMD_MAX_AGE) {
+            writeText(RESULT_FILE, JSON.stringify({ id: c.id, result: "ignored: stale command", at: String(new Date()) }));
+            return;
+        }
         var result = "unknown command";
         if (c.cmd === "build_template") result = buildTemplate();
         writeText(RESULT_FILE, JSON.stringify({ id: c.id, result: result, at: String(new Date()) }));
@@ -635,6 +643,9 @@ function checkCommands() {
 // Builds the Griddy template tracks in a fresh set. Refuses to touch a set
 // that already has clips, so it can never wipe real work.
 function buildTemplate() {
+    // deleting the old tracks would delete Griddy itself if it sat on one
+    var host = new LiveAPI("this_device canonical_parent");
+    if (String(host.unquotedpath).indexOf("master_track") < 0) return "refused: put Griddy on the Main track first";
     var n0 = song.getcount("tracks");
     for (var i = 0; i < n0; i++) {
         probe.path = "live_set tracks " + i;
@@ -829,6 +840,7 @@ function applyState(s) {
     if (s.offset && !state.offsets[s.camera || "default"]) state.offsets[s.camera || "default"] = Number(s.offset);
     var oldCam = state.camera;
     if (s.camera) state.camera = s.camera;
+    if (s.lastCmd) state.lastCmd = s.lastCmd;  // so a command never runs twice
     if (s.bg) state.bg = s.bg;
     if (s.accent) state.accent = s.accent;
     applyColors();
