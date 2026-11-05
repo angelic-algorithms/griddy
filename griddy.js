@@ -320,7 +320,7 @@ function drawTile(t, beat) {
 
     // Where is the audio file right now, and so where should the video be?
     var audioMs = (beat - clip.start + clip.marker) * 60000 / v.tempo;
-    var target = audioMs + v.leadMs + currentOffset();
+    var target = audioMs + leadMs(v) + currentOffset();
     var dur = durationMs(movie);
 
     if (target < 0 || (dur > 0 && target > dur)) {
@@ -345,6 +345,17 @@ function drawTile(t, beat) {
 
     movie.matrixcalc(tile.matrix, tile.matrix);
     tile.plane.jit_matrix(tile.matrix.name);
+}
+
+// A take's audio and video start recording at the same moment, so the real
+// lead is a few ms. Larger values came from reading the clip's position on
+// the timeline (wrong after loop or punch recording, about 8 s off) and
+// push the whole video past the end of its clip, so treat them as 0.
+// Camera latency is handled by the per camera offset, not here.
+var MAX_LEAD_MS = 1000;
+function leadMs(v) {
+    var l = Number(v.leadMs) || 0;
+    return Math.abs(l) > MAX_LEAD_MS ? 0 : l;
 }
 
 function stopCurrent(tile) {
