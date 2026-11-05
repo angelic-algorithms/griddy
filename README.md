@@ -35,7 +35,12 @@ Live loads Griddy straight from this folder, so the repo is cloned into the User
 |---|---|
 | `griddy.js` | The engine. All the logic: reading the set, sync, recording, linking takes, the grid. Runs in Max's built in JavaScript engine (older JavaScript: use `var`, no arrow functions or classes). |
 | `Griddy.amxd` | The Max patch Live loads: camera, recorder, frame clock, buttons. Edit it in Max (edit button on the device) and save with Cmd+S. This file is the source of truth for the patch. |
+| `griddy_title.png` | The "Griddy" title on the device panel. Regenerate with `tools/make_title.swift` (font: Sedgwick Ave Display from Google Fonts). |
 | `docs/how-it-works.md` | Flowcharts of how the code works. |
+
+## Colors
+
+Click **Colors** on the device to open the swatches. **Background** colors the grid window and the device panel; **Accent** colors the toggles and the Colors button. Click a swatch or type a hex code like `#C2CBD4` and press Return. Your choice is saved in `griddy_data.json` and comes back the next time you open a set.
 
 ## Editing
 
