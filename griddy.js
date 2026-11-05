@@ -12,7 +12,8 @@
 //   init, frame, jit_matrix <name>, restore <json>, select <i>,
 //   importvideo <path>, cleartake, folder <path>, offset <ms>,
 //   follow <0|1>, window <0|1>, fullscreen <0|1>, camera <name>,
-//   colors <0|1>, bgswatch <i>, accentswatch <i>, bghex <hex>, accenthex <hex>
+//   colors <0|1>, bgswatch <i>, accentswatch <i>, bghex <hex>, accenthex <hex>,
+//   trashresult <ok|failed> <path>   (from [node.script griddy_trash.js])
 // Outlets:
 //   0 state -> pattr   1 recorder -> jit.record   2 track menu
 //   3 status line      4 ui sync   5 camera -> jit.grab   6 camera menu
@@ -61,10 +62,12 @@ var PATCH = this.patcher;
 
 // ---------- runtime ----------
 var ready = false;
-var song = null, probe = null, cp = null;
+var song = null, probe = null, cp = null, vp = null;
 var observers = [];
 var win = null, render = null;
-var tracks = [];       // every armable track: { id, index, name, armed, clips: [...] }
+var tracks = [];       // every armable track: { id, index, name, armed, silent, clips: [...] }
+var lastTrackFiles = {}; // track id -> linked audio files, from the previous scan
+var goneTracks = [];   // deleted tracks: { name, files }; purged when recording starts
 var menuSig = "", gridSig = "";
 var tiles = {};        // track id -> tile
 var shown = [];        // tracks currently in the grid, in set order
@@ -132,6 +135,7 @@ function init() {
     song = new LiveAPI("live_set");
     probe = new LiveAPI("live_set");
     cp = new LiveAPI("live_set");
+    vp = new LiveAPI("live_set");
     observers = [];
     watch("is_playing", function (v) { isPlaying = v; checkRecord(); });
     watch("record_mode", function (v) { recordMode = v; checkRecord(); });
@@ -178,11 +182,16 @@ function scanSet() {
     for (var i = 0; i < count; i++) {
         probe.path = "live_set tracks " + i;
         if (Number(probe.get("can_be_armed")) !== 1) continue; // group tracks
+        // muted, silenced by another track's solo, or fader all the way down
+        vp.path = "live_set tracks " + i + " mixer_device volume";
         var t = {
             id: Number(probe.id),
             index: i,
             name: str(probe.get("name")),
             armed: Number(probe.get("arm")) === 1,
+            silent: Number(probe.get("mute")) === 1 ||
+                    Number(probe.get("muted_via_solo")) === 1 ||
+                    Number(vp.get("value")) <= 0,
             clips: []
         };
         var n = probe.getcount("arrangement_clips");
@@ -200,6 +209,7 @@ function scanSet() {
         }
         list.push(t);
     }
+    noteGoneTracks(list);
     tracks = list;
     updateMenu();
     updateGrid();
@@ -219,6 +229,7 @@ function updateMenu() {
 // (so you can see the camera before you record).
 function updateGrid() {
     shown = tracks.filter(function (t) {
+        if (t.silent && !isRecTarget(t.id)) return false; // can't hear it, don't show it
         return t.clips.length > 0 || (t.armed && camMatrixName);
     });
     var sig = shown.map(function (t) { return t.id; }).join(",");
@@ -424,6 +435,7 @@ function startRecording() {
     recording = { ids: ids, path: path, startBeat: beat, tempo: tempo };
     outlet(OUT_REC, "write", path);
     status("Recording video for " + names.join(", "));
+    purgeGoneTracks();
 }
 
 function stopRecording() {
@@ -964,6 +976,63 @@ function paintSwatches(prefix, list, chosen, ring) {
         o.message("border", on ? 2 : 1);
         o.message("bordercolor", on ? ring[0] : 0.4, on ? ring[1] : 0.4, on ? ring[2] : 0.4, 1);
     }
+}
+
+// =====================================================================
+// Deleted tracks
+// A deleted track's takes are kept until the next recording starts, so an
+// undo brings everything back. Then its links are forgotten and its videos
+// go to the Trash, unless the clip is still in the set (undo, or moved or
+// copied to another track) or another link still uses the video.
+// =====================================================================
+function noteGoneTracks(list) {
+    var now = {}, files = {};
+    for (var i = 0; i < list.length; i++) {
+        now[list[i].id] = true;
+        files[list[i].id] = list[i].clips.map(function (c) { return c.file; });
+    }
+    for (var id in lastTrackFiles) {
+        if (!now[id] && lastTrackFiles[id].files.length) goneTracks.push(lastTrackFiles[id]);
+    }
+    lastTrackFiles = {};
+    for (var j = 0; j < list.length; j++) {
+        lastTrackFiles[list[j].id] = { name: list[j].name, files: files[list[j].id] };
+    }
+}
+
+function purgeGoneTracks() {
+    if (!goneTracks.length) return;
+    var inSet = {};
+    for (var i = 0; i < tracks.length; i++) {
+        for (var c = 0; c < tracks[i].clips.length; c++) inSet[tracks[i].clips[c].file] = true;
+    }
+    var videos = [], names = [];
+    for (var g = 0; g < goneTracks.length; g++) {
+        var gone = goneTracks[g], dropped = 0;
+        for (var f = 0; f < gone.files.length; f++) {
+            var file = gone.files[f];
+            if (inSet[file] || !state.videos[file]) continue;
+            videos.push(state.videos[file].video);
+            delete state.videos[file];
+            dropped++;
+        }
+        if (dropped) names.push(gone.name);
+    }
+    goneTracks = [];
+    if (!names.length) return;
+    save();
+    var trashed = 0;
+    for (var v = 0; v < videos.length; v++) {
+        if (videoInUse(videos[v]) || (recording && recording.path === videos[v])) continue;
+        messnamed("griddy_trash_cmd", "trash", videos[v]);
+        trashed++;
+    }
+    post("Griddy: removed takes of deleted track(s) " + names.join(", ") + ", " + trashed + " video(s) to the Trash\n");
+}
+
+function trashresult(result) {
+    var p = arrayfromargs(arguments).slice(1).join(" ");
+    if (result !== "ok") status("Couldn't move " + p + " to the Trash");
 }
 
 // Clean up when the device is removed
