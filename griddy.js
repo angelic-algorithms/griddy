@@ -29,7 +29,6 @@ var OUT_STATE = 0, OUT_REC = 1, OUT_TRACKS = 2, OUT_STATUS = 3, OUT_UI = 4, OUT_
 var CTX = "griddy";
 var WIN_W = 1280, WIN_H = 720;
 var ASPECT = WIN_W / WIN_H;
-var TILE_W = 640, TILE_H = 360;
 var DRIFT_MS = 80;     // only seek when a video drifts more than this
 var GAP = 0.96;        // tile size inside its grid cell
 var SCAN_EVERY = 15;   // frames between scans of the set (about twice a second)
@@ -269,7 +268,7 @@ function makeTile() {
     plane.enable = 0;
     return {
         plane: plane,
-        matrix: new JitterMatrix(4, "char", TILE_W, TILE_H),
+        matrix: new JitterMatrix(4, "char", 1, 1), // placeholder; movies draw to textures
         movies: {},      // video path -> jit.movie (one per take used on this track)
         current: null,   // the movie playing right now
         running: false
@@ -284,11 +283,13 @@ function freeTile(t) {
 
 function movieFor(tile, path) {
     if (!tile.movies[path]) {
+        // Decode straight to a GPU texture (as Cycling '74's jitpolymovie
+        // does) instead of decoding, scaling and uploading on the CPU
         var m = new JitterObject("jit.movie");
+        m.output_texture = 1;
+        m.drawto = CTX;
         m.autostart = 0;
         m.loop = 0;
-        m.adapt = 0;
-        m.dim = [TILE_W, TILE_H];
         m.read(path);
         tile.movies[path] = m;
     }
@@ -376,8 +377,8 @@ function drawTile(t, beat) {
         if (Math.abs(timeMs(movie) - target) > DRIFT_MS) seekMs(movie, target);
     }
 
-    movie.matrixcalc(tile.matrix, tile.matrix);
-    tile.plane.jit_matrix(tile.matrix.name);
+    movie.matrixcalc(tile.matrix, tile.matrix); // updates the movie's texture
+    tile.plane.jit_gl_texture(movie.texture_name);
 }
 
 // A take's audio and video start recording at the same moment, so the real
