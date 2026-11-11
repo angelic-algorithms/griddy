@@ -154,6 +154,12 @@ void PlaybackEngine::syncLoop()
     }
 }
 
+bool PlaybackEngine::enableGpuCompositor()
+{
+    const auto size = canvasSize (config.canvas);
+    return gpu.initialise (size.x, size.y);
+}
+
 juce::Image PlaybackEngine::renderOnce()
 {
     const auto t0 = juce::Time::getMillisecondCounterHiRes();
@@ -165,11 +171,16 @@ juce::Image PlaybackEngine::renderOnce()
 
     {
         const std::scoped_lock sl (outputLock);
-        compositor.render (output, cells, [&] (int slot) -> std::shared_ptr<const VideoFrame>
+        auto frameFor = [&] (int slot) -> std::shared_ptr<const VideoFrame>
         {
             const auto& f = frames[(size_t) slot];
             return f != nullptr ? f->frame : nullptr;
-        });
+        };
+
+        if (gpu.available())
+            gpu.render (output, cells, frameFor);
+        else
+            compositor.render (output, cells, frameFor);
     }
 
     // Measure how far each shown picture is from where the audio is, right now.

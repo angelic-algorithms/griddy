@@ -12,6 +12,7 @@
 #include <juce_graphics/juce_graphics.h>
 
 #include "TestSignals.h"
+#include "engine/GpuCompositor.h"
 #include "engine/PlaybackEngine.h"
 
 #include <algorithm>
@@ -1144,6 +1145,97 @@ void bench()
     }
 }
 
+void gpuCompositor()
+{
+    GpuCompositor gpu;
+    if (! gpu.initialise (1280, 720))
+    {
+        say ("  no OpenGL context here; skipped (the CPU compositor stays in use)");
+        return;
+    }
+
+    say ("  renderer: " + gpu.description());
+    const auto software = gpu.description().containsIgnoreCase ("llvmpipe") || gpu.description().containsIgnoreCase ("software") || gpu.description().containsIgnoreCase ("softpipe");
+    metric ("renderer is software", software ? 1.0 : 0.0, "");
+
+    for (auto canvas : { Canvas::hd720, Canvas::hd1080 })
+    {
+        const auto size = canvasSize (canvas);
+        if (! gpu.initialise (size.x, size.y))
+        {
+            check (false, "GL context for " + juce::String (size.x) + "x" + juce::String (size.y));
+            continue;
+        }
+
+        for (int slots : { 1, 4, 9 })
+        {
+            std::vector<std::shared_ptr<const VideoFrame>> frames;
+            for (int i = 0; i < slots; ++i)
+            {
+                auto f = std::make_shared<VideoFrame>();
+                f->image = makeCodedFrame (640, 360, i + 1, 77 + i * 5);
+                frames.push_back (f);
+            }
+
+            const auto cells = computeLayout (slots);
+            auto frameFor = [&] (int s) { return frames[(size_t) s]; };
+            juce::Image cpu (juce::Image::ARGB, size.x, size.y, true, juce::SoftwareImageType());
+            juce::Image gl (juce::Image::ARGB, size.x, size.y, true, juce::SoftwareImageType());
+            Compositor ref;
+            ref.render (cpu, cells, frameFor);
+            gpu.render (gl, cells, frameFor);
+
+            // Compare every channel; bilinear implementations differ by a little at edges.
+            double sum = 0.0, worst = 0.0;
+            {
+                const juce::Image::BitmapData a (cpu, juce::Image::BitmapData::readOnly), b (gl, juce::Image::BitmapData::readOnly);
+                for (int y = 0; y < size.y; ++y)
+                    for (int x = 0; x < size.x; ++x)
+                    {
+                        const auto pa = a.getPixelColour (x, y), pb = b.getPixelColour (x, y);
+                        const double d = (std::abs ((int) pa.getRed() - (int) pb.getRed()) + std::abs ((int) pa.getGreen() - (int) pb.getGreen()) + std::abs ((int) pa.getBlue() - (int) pb.getBlue())) / 3.0;
+                        sum += d;
+                        worst = std::max (worst, d);
+                    }
+            }
+
+            const auto mean = sum / ((double) size.x * size.y);
+            say ("  " + juce::String (size.x) + "x" + juce::String (size.y) + ", " + juce::String (slots) + " slots: mean channel difference vs CPU " + juce::String (mean, 2) + " of 255, worst pixel " + juce::String (worst, 0));
+            check (mean < 2.5, "GPU picture matches the CPU reference (" + juce::String (size.x) + "x" + juce::String (size.y) + ", " + juce::String (slots) + " slots)");
+
+            // Timing: steady state with frames already uploaded, and with a new frame every call.
+            double drawSum = 0, readSum = 0, uploadSum = 0;
+            const int N = 30;
+            for (int i = 0; i < N; ++i)
+            {
+                gpu.render (gl, cells, frameFor);
+                drawSum += gpu.lastDrawMs();
+                readSum += gpu.lastReadbackMs();
+            }
+
+            for (int i = 0; i < N; ++i)
+            {
+                for (auto& f : frames)
+                {
+                    auto n = std::make_shared<VideoFrame>();
+                    n->image = f->image;
+                    f = n;
+                }
+                const auto t0 = juce::Time::getMillisecondCounterHiRes();
+                gpu.render (gl, cells, frameFor);
+                uploadSum += juce::Time::getMillisecondCounterHiRes() - t0;
+            }
+
+            const auto name = juce::String (size.x) + "x" + juce::String (size.y) + " " + juce::String (slots) + " slots";
+            metric ("GPU draw " + name, drawSum / N, "ms");
+            metric ("GPU readback " + name, readSum / N, "ms");
+            metric ("GPU total with all frames new " + name, uploadSum / N, "ms");
+        }
+    }
+
+    gpu.shutdown();
+}
+
 struct Scenario { const char* name; std::function<void()> run; bool inDefaultRun; };
 } // namespace
 
@@ -1181,6 +1273,7 @@ int main (int argc, char** argv)
         { "warped", warpedClip, true },
         { "embedded", embeddedSync, true },
         { "bench", bench, true },
+        { "gpu", gpuCompositor, true },
         { "soak", [&] { soak (soakSeconds, soakSlots, soakCanvas); }, false },
     };
 

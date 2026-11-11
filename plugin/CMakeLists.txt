@@ -43,6 +43,7 @@ set(GRIDDY_CORE_SOURCES
     source/engine/BeatClock.cpp
     source/engine/CollageLayout.cpp
     source/engine/Compositor.cpp
+    source/engine/GpuCompositor.cpp
     source/engine/FrameStore.cpp
     source/engine/TakeFormat.cpp
     source/engine/TakeHistory.cpp
@@ -140,6 +141,7 @@ target_link_libraries(Griddy
     PRIVATE
         GriddyUiData
         juce::juce_audio_utils
+        juce::juce_opengl
         juce::juce_gui_extra
         juce::juce_video
     PUBLIC
@@ -176,7 +178,7 @@ if(GRIDDY_BUILD_TESTS)
     target_include_directories(GriddyTests PRIVATE source tests)
     target_compile_definitions(GriddyTests PRIVATE JUCE_USE_CURL=0 JUCE_WEB_BROWSER=0)
     target_link_libraries(GriddyTests
-        PRIVATE juce::juce_core juce::juce_graphics juce::juce_events juce::juce_gui_basics
+        PRIVATE juce::juce_core juce::juce_graphics juce::juce_events juce::juce_gui_basics juce::juce_opengl
         PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
 
     # The headless engine harness: fake DAW, fake webcam, real takes. Run by hand and in CI.
@@ -187,7 +189,7 @@ if(GRIDDY_BUILD_TESTS)
     target_include_directories(GriddyHarness PRIVATE source tests)
     target_compile_definitions(GriddyHarness PRIVATE JUCE_USE_CURL=0 JUCE_WEB_BROWSER=0)
     target_link_libraries(GriddyHarness
-        PRIVATE juce::juce_core juce::juce_graphics juce::juce_events juce::juce_gui_basics
+        PRIVATE juce::juce_core juce::juce_graphics juce::juce_events juce::juce_gui_basics juce::juce_opengl
         PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
 
     # A fake DAW that loads the built VST3 and exercises it end to end.

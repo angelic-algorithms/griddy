@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Compositor.h"
+#include "GpuCompositor.h"
 #include "SlotPlayer.h"
 #include "SyncController.h"
 #include "TakeHistory.h"
@@ -79,6 +80,10 @@ public:
     explicit PlaybackEngine (Config config);
     ~PlaybackEngine();
 
+    /** Message thread. Tries to switch compositing to OpenGL; returns false and keeps the CPU path if no GL context can be made. */
+    bool enableGpuCompositor();
+    bool usingGpu() const noexcept { return gpu.available(); }
+
     void start();
     void stop();
 
@@ -136,6 +141,7 @@ private:
     TakeHistory takeHistory;
     std::vector<std::unique_ptr<Slot>> slots;
     Compositor compositor;
+    GpuCompositor gpu;
 
     std::atomic<bool> running { false };
     std::unique_ptr<juce::Thread> syncThread, renderThread;
