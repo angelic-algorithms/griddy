@@ -53,6 +53,14 @@ export type SlotInfo = {
 
 export type Layout = { canvas: number; template: number; gap: number; background: string; order: number[] };
 
+export type ExportStatus = {
+  available: boolean;
+  state: "idle" | "waiting" | "recording" | "writing" | "done" | "failed";
+  seconds: number;
+  file: string;
+  error: string;
+};
+
 export type EngineStatus = {
   session: string;
   slot: number;
@@ -64,6 +72,7 @@ export type EngineStatus = {
   slots: SlotInfo[];
   takes: TakeInfo[][];
   layout: Layout;
+  export: ExportStatus;
   framesWritten?: number;
   framesDropped?: number;
   audioDropped?: number;
@@ -109,6 +118,8 @@ export const api = {
   restoreTake: native<boolean>("restoreTake") as (slot: number, id: number) => Promise<boolean>,
   setSlip: native<boolean>("setSlip") as (slot: number, id: number, seconds: number) => Promise<boolean>,
   setLayout: native<Layout>("setLayout") as (canvas: number, gap: number, background: string, template: number) => Promise<Layout>,
+  startExport: native<boolean>("startExport"),
+  stopExport: native<boolean>("stopExport"),
   swapCells: native<boolean>("swapCells") as (a: number, b: number) => Promise<boolean>,
 };
 

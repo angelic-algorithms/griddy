@@ -13,6 +13,7 @@
 
 #include "TestSignals.h"
 #include "engine/GpuCompositor.h"
+#include "engine/GridExport.h"
 #include "engine/MovTake.h"
 #include "engine/PlaybackEngine.h"
 
@@ -1261,6 +1262,67 @@ bool movAudio (const juce::File& mov, std::vector<float>& out)
     return true;
 }
 
+void gridExport()
+{
+    if (! gridExportAvailable())
+    {
+        say ("  no MP4 writer in this build; skipped");
+        return;
+    }
+
+    const auto file = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("griddy_grid_export.mp4");
+    file.deleteFile();
+
+    ExportSettings cfg;
+    cfg.file = file;
+    cfg.width = 1280;
+    cfg.height = 720;
+    cfg.fps = 30;
+    cfg.sampleRate = 48000.0;
+
+    GridExporter ex;
+    juce::String error;
+    check (ex.start (cfg, error), "export starts " + error);
+
+    juce::Image frame (juce::Image::ARGB, 1280, 720, true, juce::SoftwareImageType());
+    const int seconds = 2, fps = 30, perFrame = 48000 / fps;
+    std::vector<float> l ((size_t) perFrame), r ((size_t) perFrame);
+    double phase = 0.0;
+
+    for (int i = 0; i < seconds * fps; ++i)
+    {
+        for (int k = 0; k < perFrame; ++k)
+        {
+            l[(size_t) k] = 0.3f * (float) std::sin (phase);
+            r[(size_t) k] = 0.3f * (float) std::sin (phase * 1.5);
+            phase += 2.0 * juce::MathConstants<double>::pi * 440.0 / 48000.0;
+        }
+
+        ex.pushAudio (l.data(), r.data(), perFrame);
+
+        juce::Graphics g (frame);
+        g.fillAll (juce::Colour::fromHSV ((float) i / 60.0f, 0.7f, 0.9f, 1.0f));
+        g.setColour (juce::Colours::white);
+        g.fillRect (20 + i * 10, 300, 100, 100);
+        ex.pushVideo (frame, ex.clockSeconds() - 1.0 / fps);
+        juce::Thread::sleep (12);
+    }
+
+    check (ex.finish (error), "export finishes " + error);
+    check (file.existsAsFile() && file.getSize() > 20000, "the file exists and has content (" + juce::String (file.getSize()) + " bytes)");
+
+    const auto info = probeMedia (file);
+    say ("  file: " + juce::String (info.width) + "x" + juce::String (info.height) + " " + info.videoCodec + " " + juce::String (info.videoFrames)
+         + " pictures, " + info.audioCodec + " " + juce::String (info.audioChannels) + " ch, picture " + juce::String (info.videoSeconds, 2)
+         + " s, sound " + juce::String (info.audioSeconds, 2) + " s, dropped " + juce::String (ex.videoFramesDropped()));
+    check (info.ok, "the file reads back " + info.problem);
+    check (info.width == 1280 && info.height == 720, "picture size is kept");
+    check (info.videoFrames >= 50, "most pictures are in the file");
+    check (std::abs (info.audioSeconds - 2.0) < 0.25, "the sound is as long as what was played");
+    check (std::abs (info.videoSeconds - 2.0) < 0.35, "the picture is as long as the sound");
+    file.deleteFile();
+}
+
 void movExport()
 {
     if (! movExportAvailable())
@@ -1455,6 +1517,7 @@ int main (int argc, char** argv)
         { "bench", bench, true },
         { "gpu", gpuCompositor, true },
         { "mov_export", movExport, true },
+        { "grid_export", gridExport, true },
         { "mov_playback", movPlayback, true },
         { "soak", [&] { soak (soakSeconds, soakSlots, soakCanvas); }, false },
     };

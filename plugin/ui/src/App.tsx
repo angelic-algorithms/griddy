@@ -1,5 +1,6 @@
 import { api, params, Status, Transport } from "./bridge";
 import { LayoutPanel } from "./Layout";
+import { ExportPanel } from "./Export";
 import { SyncChip, Takes } from "./Takes";
 import { Controls, RecordControls } from "./Controls";
 import { useBackendEvent, useParam } from "./hooks";
@@ -122,6 +123,7 @@ export function App() {
                 </ul>
               </section>
               <LayoutPanel engine={status.engine} />
+              <ExportPanel engine={status.engine} />
             </>
           )}
           <Controls />

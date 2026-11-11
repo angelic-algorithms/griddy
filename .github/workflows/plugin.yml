@@ -52,6 +52,9 @@ jobs:
       - name: Decoders and exporter (gate, not timing sensitive)
         run: GRIDDY_DEBUG_DECODER=1 ./build/GriddyHarness_artefacts/Release/GriddyHarness mov_export
 
+      - name: MP4 export of the grid (gate)
+        run: ./build/GriddyHarness_artefacts/Release/GriddyHarness grid_export
+
       - name: GPU compositor against the CPU reference (numbers only)
         continue-on-error: true
         run: ./build/GriddyHarness_artefacts/Release/GriddyHarness gpu
@@ -124,6 +127,9 @@ jobs:
 
       - name: Decoders and exporter (gate, not timing sensitive)
         run: xvfb-run -a ./build/GriddyHarness_artefacts/Release/GriddyHarness mov_export
+
+      - name: MP4 export of the grid (gate)
+        run: xvfb-run -a ./build/GriddyHarness_artefacts/Release/GriddyHarness grid_export
 
       - name: GPU compositor against the CPU reference (numbers only)
         continue-on-error: true

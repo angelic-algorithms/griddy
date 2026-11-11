@@ -2,6 +2,7 @@
 
 #include "PlaybackEngine.h"
 #include "TransportState.h"
+#include "GridExport.h"
 #include "VideoEngine.h"
 
 #include <juce_audio_basics/juce_audio_basics.h>
@@ -117,6 +118,14 @@ public:
     juce::var layoutToVar() const;
     void applyLayoutVar (const juce::var& v);
 
+    // ---- MP4 export of the grid and the mix ----
+    // Arm it, press play in the DAW: the master instance's audio (put it on the master track) and the composited grid are
+    // written to <output folder>/Exports/ until the DAW stops. Message thread.
+    bool startExport();
+    void stopExport();
+    enum ExportState { exportIdle = 0, exportWaiting, exportRecording, exportWriting, exportDone, exportFailed };
+    int getExportState() const noexcept { return exportState.load(); }
+
     juce::var getStatus (const Member* member) const;
     juce::MemoryBlock getPreviewJpeg() const;
     int64_t getPreviewSerial() const noexcept { return previewSerial.load(); }
@@ -130,6 +139,7 @@ private:
     void buildEngine();
     void destroyEngine();
     void drawPreview();
+    void updateExport();
     void finishTake (int slot);
     void reloadLater (int slot);
     juce::var takesToVar (int slot) const;
@@ -162,6 +172,13 @@ private:
 
     mutable std::mutex layoutLock;
     GridLayout layout;
+
+    GridExporter exporter;
+    std::atomic<GridExporter*> audioExporter { nullptr };
+    std::atomic<int> exportState { exportIdle };
+    std::atomic<bool> exportStopRequested { false };
+    juce::File exportFile;       // guarded by statusLock
+    juce::String exportError;    // guarded by statusLock
 
     juce::ThreadPool worker { 1 };
 

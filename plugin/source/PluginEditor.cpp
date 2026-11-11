@@ -95,6 +95,15 @@ juce::WebBrowserComponent::Options GriddyEditor::makeBrowserOptions()
 
             complete (hub.layoutToVar());
         })
+        .withNativeFunction ("startExport", [this] (const juce::Array<juce::var>&, auto complete)
+        {
+            complete (hub.startExport());
+        })
+        .withNativeFunction ("stopExport", [this] (const juce::Array<juce::var>&, auto complete)
+        {
+            hub.stopExport();
+            complete (true);
+        })
         .withNativeFunction ("swapCells", [this] (const juce::Array<juce::var>& args, auto complete)
         {
             complete (args.size() > 1 && hub.swapCells ((int) args[0], (int) args[1]));

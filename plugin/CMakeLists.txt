@@ -42,7 +42,7 @@ endif()
 # macOS: AVFoundation decodes take.mov (VideoToolbox underneath). The core is shared by the plugin, tests and harness.
 add_library(GriddyApple INTERFACE)
 if(APPLE)
-    set(GRIDDY_APPLE_SOURCES source/engine/AVFoundationDecoder.mm source/engine/AVFoundationExport.mm)
+    set(GRIDDY_APPLE_SOURCES source/engine/AVFoundationDecoder.mm source/engine/AVFoundationExport.mm source/engine/AVFoundationExportGrid.mm)
     set_source_files_properties(${GRIDDY_APPLE_SOURCES} PROPERTIES COMPILE_FLAGS "-fobjc-arc")
     target_link_libraries(GriddyApple INTERFACE "-framework AVFoundation" "-framework CoreMedia" "-framework CoreVideo")
 endif()
@@ -75,6 +75,7 @@ set(GRIDDY_CORE_SOURCES
     source/engine/Compositor.cpp
     source/engine/GpuCompositor.cpp
     source/engine/MovTake.cpp
+    source/engine/GridExport.cpp
     source/engine/FrameStore.cpp
     source/engine/TakeFormat.cpp
     source/engine/TakeHistory.cpp

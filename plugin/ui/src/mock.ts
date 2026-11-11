@@ -94,6 +94,12 @@ export function createMock() {
           layout = { ...layout, order };
           return true;
         }
+        case "startExport":
+          exportState = "recording";
+          return true;
+        case "stopExport":
+          exportState = "done";
+          return true;
         case "chooseOutputFolder":
           outputFolder = "/Users/you/Desktop/Griddy takes";
           return outputFolder;
@@ -115,6 +121,7 @@ export function createMock() {
     bool: () => store(false),
   };
 
+  let exportState = "idle";
   let layout = { canvas: 0, template: 0, gap: 4, background: "0b0b0f", order: [0, 1, 2, 3, 4, 5, 6, 7, 8] };
   let takes = [
     { id: 3, state: "review", seconds: 12.4, slip: 0, hasMov: true },
@@ -130,6 +137,7 @@ export function createMock() {
       })),
       takes: [takes, [], [], []],
       layout,
+      export: { available: true, state: exportState, seconds: 12, file: "/Users/you/Movies/Griddy/Exports/mock.mp4", error: "" },
     };
   }
 

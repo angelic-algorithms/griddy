@@ -37,6 +37,7 @@ Hub::Hub()
 Hub::~Hub()
 {
     stopThread (5000);
+    audioExporter = nullptr;
     worker.removeAllJobs (true, 60000);
     destroyEngine();
 }
@@ -360,6 +361,11 @@ void Hub::processBlock (Member& member, const juce::AudioBuffer<float>& buffer, 
     member.wantRecording.store (want, std::memory_order_release);
     member.playing.store (t.isPlaying, std::memory_order_relaxed);
 
+    // The master instance hears the mix; while an export runs it hands that to the exporter.
+    if (member.isMaster.load (std::memory_order_relaxed))
+        if (auto* x = audioExporter.load (std::memory_order_acquire); x != nullptr && t.isPlaying && buffer.getNumChannels() > 0)
+            x->pushAudio (buffer.getReadPointer (0), buffer.getNumChannels() > 1 ? buffer.getReadPointer (1) : nullptr, buffer.getNumSamples());
+
     if (e == nullptr || slot < 0)
         return;
 
@@ -493,8 +499,107 @@ void Hub::controlTick()
         }
     }
 
+    updateExport();
+
     if ((tick++ % 8) == 0)
         drawPreview();
+}
+
+//==============================================================================
+bool Hub::startExport()
+{
+    if (! gridExportAvailable())
+    {
+        const std::scoped_lock sl (statusLock);
+        exportError = "This build cannot write MP4 files.";
+        exportState = exportFailed;
+        return false;
+    }
+
+    auto s = exportState.load();
+    if (s == exportWaiting || s == exportRecording || s == exportWriting)
+        return false;
+
+    {
+        const std::scoped_lock sl (statusLock);
+        exportError.clear();
+    }
+
+    exportStopRequested = false;
+    exportState = exportWaiting;
+    return true;
+}
+
+void Hub::stopExport()
+{
+    if (exportState.load() == exportWaiting)
+        exportState = exportIdle;
+    else
+        exportStopRequested = true;
+}
+
+void Hub::updateExport()
+{
+    const auto state = exportState.load();
+    if (state != exportWaiting && state != exportRecording)
+        return;
+
+    bool masterPlaying = false;
+    {
+        const std::scoped_lock sl (memberLock);
+        for (const auto& m : members)
+            if (m->isMaster.load())
+                masterPlaying = masterPlaying || m->playing.load();
+    }
+
+    if (state == exportWaiting && masterPlaying)
+    {
+        const auto look = getLayout();
+        const auto size = canvasSize (look.canvas);
+
+        ExportSettings cfg;
+        cfg.width = size.x;
+        cfg.height = size.y;
+        cfg.fps = 30;
+        cfg.sampleRate = sampleRate;
+        cfg.file = videoEngine.getOutputFolder().getChildFile ("Exports")
+                       .getChildFile (juce::File::createLegalFileName (sessionId + " " + juce::Time::getCurrentTime().formatted ("%Y-%m-%d %H-%M-%S")) + ".mp4");
+
+        juce::String error;
+        if (exporter.start (cfg, error))
+        {
+            {
+                const std::scoped_lock sl (statusLock);
+                exportFile = cfg.file;
+            }
+
+            audioExporter = &exporter;
+            exportState = exportRecording;
+        }
+        else
+        {
+            const std::scoped_lock sl (statusLock);
+            exportError = error;
+            exportState = exportFailed;
+        }
+    }
+    else if (state == exportRecording && (! masterPlaying || exportStopRequested.load()))
+    {
+        audioExporter = nullptr;
+        exportState = exportWriting;
+
+        worker.addJob ([this]
+        {
+            juce::Thread::sleep (30); // a block already running on the audio thread finishes first
+            juce::String error;
+            const auto ok = exporter.finish (error);
+            {
+                const std::scoped_lock sl (statusLock);
+                exportError = ok ? juce::String() : error;
+            }
+            exportState = ok ? exportDone : exportFailed;
+        });
+    }
 }
 
 void Hub::finishTake (int slot)
@@ -537,7 +642,10 @@ GridLayout Hub::getLayout() const
 void Hub::setLayout (Canvas canvas, float gap, uint32_t background, Template shape)
 {
     const std::scoped_lock sl (layoutLock);
-    layout.canvas = canvas;
+    // The file keeps the size it started with, so the canvas stays put while an export runs.
+    const auto es = exportState.load();
+    if (es != exportRecording && es != exportWriting)
+        layout.canvas = canvas;
     layout.shape = shape;
     layout.gap = juce::jlimit (0.0f, 48.0f, gap);
     layout.background = background | 0xff000000u;
@@ -657,6 +765,9 @@ void Hub::drawPreview()
         return videoEngine.latestFrame (slot);
     });
 
+    if (exportState.load() == exportRecording)
+        exporter.pushVideo (output, exporter.clockSeconds());
+
     {
         juce::Graphics g (previewImage);
         g.setImageResamplingQuality (juce::Graphics::lowResamplingQuality);
@@ -749,6 +860,15 @@ juce::var Hub::getStatus (const Member* member) const
     {
         const std::scoped_lock sl (statusLock);
         obj->setProperty ("error", lastError);
+
+        auto x = std::make_unique<juce::DynamicObject>();
+        static const char* names[] = { "idle", "waiting", "recording", "writing", "done", "failed" };
+        x->setProperty ("available", gridExportAvailable());
+        x->setProperty ("state", names[juce::jlimit (0, 5, exportState.load())]);
+        x->setProperty ("seconds", exportState.load() == exportRecording ? exporter.clockSeconds() : 0.0);
+        x->setProperty ("file", exportFile.getFullPathName());
+        x->setProperty ("error", exportError);
+        obj->setProperty ("export", juce::var (x.release()));
     }
 
     const auto active = activeSlots.load();
