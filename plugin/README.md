@@ -163,3 +163,7 @@ source/
 ui/                             React + TypeScript, built with esbuild
 tests/                          unit tests and the fake DAW smoke test
 ```
+
+## Engine harness
+
+`GriddyHarness` runs real time scenarios headlessly (fake DAW transport, fake webcam, real take files). Run `GriddyHarness` for all scenarios, or `GriddyHarness soak --soak-seconds 600`. Results: `docs/engine-benchmarks.md`.

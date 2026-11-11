@@ -943,10 +943,13 @@ void soak (double seconds, int slots, Canvas canvas)
         recs.back()->start (i, m, cfg);
     }
 
-    SyntheticCamera cam (cfg.width, cfg.height, [] { return 0; }, [&] (juce::Image img, double wall)
+    int camCounter = 0;
+    SyntheticCamera cam (cfg.width, cfg.height, [] { return 0; }, [&] (juce::Image, double wall)
     {
+        // Every slot's take gets its own label so the soak can tell the slots apart.
         for (auto& r : recs)
-            r->pushFrame (img, wall);
+            r->pushFrame (makeCodedFrame (cfg.width, cfg.height, r->currentTakeId() & 0xff, camCounter), wall);
+        ++camCounter;
     });
     cam.startThread();
 
@@ -1093,15 +1096,20 @@ void bench()
     for (auto sz : { std::pair<int, int> { 640, 360 }, { 1280, 720 }, { 1920, 1080 } })
     {
         juce::MemoryOutputStream mos;
-        juce::JPEGImageFormat fmt;
-        fmt.setQuality (0.85f);
-        fmt.writeImageToStream (makeCodedFrame (sz.first, sz.second, 1, 1), mos);
+        {
+            juce::JPEGImageFormat fmt;
+            fmt.setQuality (0.85f);
+            fmt.writeImageToStream (makeCodedFrame (sz.first, sz.second, 1, 1), mos);
+        }
+
+        mos.flush();
+        const juce::MemoryBlock jpeg (mos.getData(), mos.getDataSize());
         const auto t0 = juce::Time::getMillisecondCounterHiRes();
         for (int i = 0; i < 60; ++i)
         {
-            juce::MemoryInputStream in (mos.getMemoryBlock(), false);
-            auto img = fmt.decodeImage (in).convertedToFormat (juce::Image::ARGB);
-            if (! img.isValid()) break;
+            auto img = juce::ImageFileFormat::loadFrom (jpeg.getData(), jpeg.getSize());
+            if (! img.isValid())
+                break;
         }
         metric ("JPEG decode " + juce::String (sz.first) + "x" + juce::String (sz.second), (juce::Time::getMillisecondCounterHiRes() - t0) / 60.0, "ms per frame");
         metric ("JPEG size " + juce::String (sz.first) + "x" + juce::String (sz.second), (double) mos.getDataSize() / 1024.0, "KB");

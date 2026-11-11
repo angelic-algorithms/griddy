@@ -43,6 +43,11 @@ jobs:
       - name: Fake DAW smoke test (loads the VST3)
         run: ./build/GriddyHostSmokeTest_artefacts/Release/GriddyHostSmokeTest build/Griddy_artefacts/Release/VST3/Griddy.vst3
 
+      - name: Engine harness (real time scenarios, 60 second soak)
+        run: |
+          ./build/GriddyHarness_artefacts/Release/GriddyHarness
+          ./build/GriddyHarness_artefacts/Release/GriddyHarness soak --soak-seconds 60 --soak-720
+
       - name: Apple AU validation
         run: |
           mkdir -p ~/Library/Audio/Plug-Ins/Components
@@ -87,3 +92,8 @@ jobs:
         run: |
           ./build/GriddyTests_artefacts/Release/GriddyTests
           xvfb-run -a ./build/GriddyHostSmokeTest_artefacts/Release/GriddyHostSmokeTest build/Griddy_artefacts/Release/VST3/Griddy.vst3
+
+      - name: Engine harness (real time scenarios, 60 second soak)
+        run: |
+          xvfb-run -a ./build/GriddyHarness_artefacts/Release/GriddyHarness
+          xvfb-run -a ./build/GriddyHarness_artefacts/Release/GriddyHarness soak --soak-seconds 60 --soak-720

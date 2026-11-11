@@ -105,3 +105,15 @@ The macOS job in `.github/workflows/plugin.yml` compiles the Mac files and runs 
 ## 12. Non goals for this milestone
 
 Max for Live files, ARA2, final UI wiring for every control, Windows capture, the GPU compositor implementation beyond its interface.
+
+## As built (corrections to the design above)
+
+- Take format is a `.gtake` folder: `take.json`, `audio.wav`, `frames/NNNNNN.jpg` (full size) and `proxy/NNNNNN.jpg` (tile size). Not a `.mov`. It is crash safe and intraframe by construction. Griddy `.mov` export for the Arrangement View is not written.
+- No FFmpeg. Decode and encode use JUCE's JPEG codec behind `VideoDecoder`. Hardware decoders (VideoToolbox, Media Foundation) are not written.
+- The engine uses `juce_core`, `juce_graphics` and `juce_events` only.
+- Proxy or full frames is chosen automatically: tiles of 800 px or less use the proxy.
+- Compositing is the CPU compositor only. The GPU compositor is not written.
+- Capture takes one frame stream and records latency fields in the take: `cameraLatencySeconds`, `deliveryDelaySeconds`, `audioLatencySeconds`, `slipSeconds`. Offset is `audioLatency - cameraLatency + slip`.
+- Embedded sync locks in about 0.16 to 0.22 s, not 0.1 s.
+- The fingerprint source resets its votes when the host audio jumps (seek or loop wrap), and accepts a best match at least 1.25x the runner up, because the correlation check verifies it. Repetitive music otherwise stayed ambiguous.
+- Measured numbers: `docs/engine-benchmarks.md`. Headless harness: `plugin/tests/Harness.cpp`.
