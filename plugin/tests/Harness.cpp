@@ -177,6 +177,8 @@ Recorded recordTake (PlaybackEngine& eng, int slot, double seconds, const std::v
     Recorded r;
     r.entry = *rec.stop();
     r.movOk = wantMov && rec.waitForMovExport();
+    if (wantMov && ! r.movOk)
+        say ("  take.mov export failed: " + rec.movExportError());
     r.audio.assign (performance.begin(), performance.begin() + (long) blocks * BLK);
 
     if (embed)

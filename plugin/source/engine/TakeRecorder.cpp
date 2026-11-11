@@ -182,11 +182,13 @@ public:
     {
         juce::String error;
         ok = exportTakeMov (meta, folder, folder.getChildFile ("take.mov"), error);
+        message = error;
     }
 
     TakeMeta meta;
     juce::File folder;
     bool ok = false;
+    juce::String message;
 };
 } // namespace
 
@@ -196,6 +198,7 @@ bool TakeRecorder::waitForMovExport()
         return false;
 
     movExport->waitForThreadToExit (120000);
+    movError = static_cast<MovExportThread&> (*movExport).message;
     return static_cast<MovExportThread&> (*movExport).ok;
 }
 

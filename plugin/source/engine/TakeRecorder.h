@@ -55,6 +55,7 @@ public:
 
     /** Blocks until the take.mov of the last stopped take is written (or failed). Returns true if it exists. */
     bool waitForMovExport();
+    juce::String movExportError() const { return movError; }
 
     bool isRecording() const noexcept { return recording.load(); }
     int32_t currentTakeId() const noexcept { return entry.meta.takeId; }
@@ -82,6 +83,7 @@ private:
     std::atomic<uint64_t> written { 0 }, droppedFrames { 0 };
     std::unique_ptr<Writer> writer;
     std::unique_ptr<juce::Thread> movExport;
+    juce::String movError;
 };
 
 } // namespace griddy
