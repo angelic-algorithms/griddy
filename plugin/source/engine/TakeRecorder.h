@@ -36,6 +36,7 @@ public:
         double cameraLatencySeconds = 0.0;
         double audioLatencySeconds = 0.0;
         double fps = 30.0;
+        bool exportMov = true;          // write take.mov after the take stops (needs FFmpeg)
     };
 
     explicit TakeRecorder (TakeHistory& history);
@@ -51,6 +52,9 @@ public:
 
     /** Stops, finalises and returns the take (now in review). */
     std::optional<TakeHistory::Entry> stop();
+
+    /** Blocks until the take.mov of the last stopped take is written (or failed). Returns true if it exists. */
+    bool waitForMovExport();
 
     bool isRecording() const noexcept { return recording.load(); }
     int32_t currentTakeId() const noexcept { return entry.meta.takeId; }
@@ -77,6 +81,7 @@ private:
     std::atomic<bool> stopRequested { false };
     std::atomic<uint64_t> written { 0 }, droppedFrames { 0 };
     std::unique_ptr<Writer> writer;
+    std::unique_ptr<juce::Thread> movExport;
 };
 
 } // namespace griddy

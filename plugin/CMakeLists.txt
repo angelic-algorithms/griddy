@@ -39,11 +39,29 @@ endif()
 # The engine core: take recording, history, decoding, sync, playback. No plugin or UI code,
 # so the tests and the headless harness build exactly the same sources the plugin does.
 # ----------------------------------------------------------------------------
+# FFmpeg (LGPL, linked dynamically) reads and writes take.mov. Optional: without it takes still record and play from their JPEG frames.
+option(GRIDDY_WITH_FFMPEG "Use FFmpeg for take.mov export and decode" ON)
+add_library(GriddyFfmpeg INTERFACE)
+if(GRIDDY_WITH_FFMPEG)
+    find_package(PkgConfig QUIET)
+    if(PkgConfig_FOUND)
+        pkg_check_modules(FFMPEG QUIET IMPORTED_TARGET libavformat libavcodec libavutil libswscale)
+    endif()
+    if(FFMPEG_FOUND)
+        message(STATUS "FFmpeg ${FFMPEG_libavcodec_VERSION} found")
+        target_link_libraries(GriddyFfmpeg INTERFACE PkgConfig::FFMPEG)
+        target_compile_definitions(GriddyFfmpeg INTERFACE GRIDDY_HAVE_FFMPEG=1)
+    else()
+        message(STATUS "FFmpeg not found: take.mov export and decode are disabled")
+    endif()
+endif()
+
 set(GRIDDY_CORE_SOURCES
     source/engine/BeatClock.cpp
     source/engine/CollageLayout.cpp
     source/engine/Compositor.cpp
     source/engine/GpuCompositor.cpp
+    source/engine/MovTake.cpp
     source/engine/FrameStore.cpp
     source/engine/TakeFormat.cpp
     source/engine/TakeHistory.cpp
@@ -142,6 +160,7 @@ target_link_libraries(Griddy
         GriddyUiData
         juce::juce_audio_utils
         juce::juce_opengl
+        GriddyFfmpeg
         juce::juce_gui_extra
         juce::juce_video
     PUBLIC
@@ -178,7 +197,7 @@ if(GRIDDY_BUILD_TESTS)
     target_include_directories(GriddyTests PRIVATE source tests)
     target_compile_definitions(GriddyTests PRIVATE JUCE_USE_CURL=0 JUCE_WEB_BROWSER=0)
     target_link_libraries(GriddyTests
-        PRIVATE juce::juce_core juce::juce_graphics juce::juce_events juce::juce_gui_basics juce::juce_opengl
+        PRIVATE juce::juce_core juce::juce_graphics juce::juce_events juce::juce_gui_basics juce::juce_opengl GriddyFfmpeg
         PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
 
     # The headless engine harness: fake DAW, fake webcam, real takes. Run by hand and in CI.
@@ -189,7 +208,7 @@ if(GRIDDY_BUILD_TESTS)
     target_include_directories(GriddyHarness PRIVATE source tests)
     target_compile_definitions(GriddyHarness PRIVATE JUCE_USE_CURL=0 JUCE_WEB_BROWSER=0)
     target_link_libraries(GriddyHarness
-        PRIVATE juce::juce_core juce::juce_graphics juce::juce_events juce::juce_gui_basics juce::juce_opengl
+        PRIVATE juce::juce_core juce::juce_graphics juce::juce_events juce::juce_gui_basics juce::juce_opengl GriddyFfmpeg
         PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
 
     # A fake DAW that loads the built VST3 and exercises it end to end.

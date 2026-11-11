@@ -1,5 +1,7 @@
 #include "VideoDecoder.h"
 
+#include "MovTake.h"
+
 namespace griddy
 {
 
@@ -44,6 +46,32 @@ private:
 } // namespace
 
 std::unique_ptr<VideoDecoder> createJpegTakeDecoder() { return std::make_unique<JpegTakeDecoder>(); }
+#if ! JUCE_MAC
+std::unique_ptr<VideoDecoder> createPlatformDecoder() { return nullptr; }
+#endif
+
+std::unique_ptr<VideoDecoder> createDecoder (DecoderKind kind, const juce::File& takeFolder)
+{
+    switch (kind)
+    {
+        case DecoderKind::jpeg:     return createJpegTakeDecoder();
+        case DecoderKind::ffmpeg:   return createFfmpegDecoder();
+        case DecoderKind::platform: return createPlatformDecoder();
+        case DecoderKind::automatic: break;
+    }
+
+    if (takeFolder.getChildFile ("frames").isDirectory())
+        return createJpegTakeDecoder();
+
+    if (auto d = createPlatformDecoder())
+        return d;
+
+    if (auto d = createFfmpegDecoder())
+        return d;
+
+    return createJpegTakeDecoder();
+}
+
 std::unique_ptr<VideoDecoder> createDefaultDecoder() { return createJpegTakeDecoder(); }
 
 } // namespace griddy

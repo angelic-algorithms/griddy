@@ -59,6 +59,7 @@ public:
         int maxDecodesPerTick = 3;
         int maxOpenTakes = 2;       // the shown take and one other; the rest are closed to keep memory flat
         int tickMs = 2;
+        DecoderKind decoder = DecoderKind::automatic;
     };
 
     SlotPlayer (SyncController& controller, Config config);

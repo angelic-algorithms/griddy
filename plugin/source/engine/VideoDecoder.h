@@ -15,10 +15,10 @@ namespace griddy
     seeking costs the same as playing forward. That is the whole reason takes are intraframe.
 
     Implementations:
-      JpegTakeDecoder   portable, used by tests, the harness, Linux CI and as the fallback (this file)
-      VideoToolbox      macOS, hardware decode of ProRes Proxy or all intraframe H.264 .mov. Not written yet.
-      MediaFoundation   Windows, hardware decode through D3D11. Not written yet.
-    The two hardware backends are named by the design and cannot be built or measured without those platforms.
+      JpegTakeDecoder   portable, reads the per frame JPEGs a take is recorded as (this file)
+      FfmpegDecoder     software decode of take.mov and any file FFmpeg reads (MovTake.cpp)
+      AVFoundation      macOS, hardware decode through VideoToolbox (AVFoundationDecoder.mm)
+    A Windows Media Foundation backend is not written.
 */
 class VideoDecoder
 {
@@ -37,7 +37,16 @@ public:
 
 std::unique_ptr<VideoDecoder> createJpegTakeDecoder();
 
-/** The best decoder available on this platform. Today that is the JPEG one everywhere. */
+enum class DecoderKind { automatic, jpeg, ffmpeg, platform };
+
+/** Makes a decoder of the given kind, or nullptr if this build does not have it.
+    automatic: the JPEG frames when the take has them (the fastest path for intraframe stills), otherwise take.mov
+    through the platform decoder (hardware where there is one), otherwise FFmpeg. */
+std::unique_ptr<VideoDecoder> createDecoder (DecoderKind kind, const juce::File& takeFolder);
+
+/** Hardware backed decoder for take.mov, or nullptr. macOS: AVFoundation (VideoToolbox underneath). */
+std::unique_ptr<VideoDecoder> createPlatformDecoder();
+
 std::unique_ptr<VideoDecoder> createDefaultDecoder();
 
 } // namespace griddy

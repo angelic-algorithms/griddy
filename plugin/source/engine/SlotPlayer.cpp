@@ -78,7 +78,9 @@ SlotPlayer::Playback* SlotPlayer::playbackFor (int32_t takeId, double now)
 
     auto p = std::make_unique<Playback>();
     p->entry = *entry;
-    p->decoder = createDefaultDecoder();
+    p->decoder = createDecoder (config.decoder, entry->folder);
+    if (p->decoder == nullptr)
+        return nullptr;
 
     if (! p->decoder->open (entry->meta, entry->folder, config.useProxy))
         return nullptr;

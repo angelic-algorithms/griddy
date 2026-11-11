@@ -13,6 +13,7 @@
 
 #include "TestSignals.h"
 #include "engine/GpuCompositor.h"
+#include "engine/MovTake.h"
 #include "engine/PlaybackEngine.h"
 
 #include <algorithm>
@@ -136,15 +137,17 @@ struct Recorded
 {
     TakeHistory::Entry entry;
     std::vector<float> audio; // what the DAW would have on its clip
+    bool movOk = false;
     int label() const { return entry.meta.takeId & 0xff; }
     int32_t id() const { return entry.meta.takeId; }
 };
 
-Recorded recordTake (PlaybackEngine& eng, int slot, double seconds, const std::vector<float>& performance, double hostStartSeconds, bool embed = false)
+Recorded recordTake (PlaybackEngine& eng, int slot, double seconds, const std::vector<float>& performance, double hostStartSeconds, bool embed = false, bool wantMov = false)
 {
     TakeRecorder rec (eng.history());
     TakeRecorder::Config cfg;
     cfg.embedSync = embed;
+    cfg.exportMov = wantMov;
     if (! bigTakes)
     {
         cfg.width = 640; cfg.height = 360; cfg.proxyWidth = 320; cfg.proxyHeight = 180;
@@ -173,6 +176,7 @@ Recorded recordTake (PlaybackEngine& eng, int slot, double seconds, const std::v
     cam.stopThread (2000);
     Recorded r;
     r.entry = *rec.stop();
+    r.movOk = wantMov && rec.waitForMovExport();
     r.audio.assign (performance.begin(), performance.begin() + (long) blocks * BLK);
 
     if (embed)
@@ -931,6 +935,7 @@ void soak (double seconds, int slots, Canvas canvas)
     std::vector<std::unique_ptr<TakeRecorder>> recs;
     std::vector<std::vector<float>> perfs;
     TakeRecorder::Config cfg;
+    cfg.exportMov = false;
     if (! bigTakes) { cfg.width = 640; cfg.height = 360; cfg.proxyWidth = 640 / 2; cfg.proxyHeight = 360 / 2; }
     else { cfg.proxyWidth = 640; cfg.proxyHeight = 360; }
 
@@ -1236,6 +1241,141 @@ void gpuCompositor()
     gpu.shutdown();
 }
 
+// Decodes take.mov's audio with the ffmpeg command line, as another program (a DAW) would see it.
+bool movAudio (const juce::File& mov, std::vector<float>& out)
+{
+    const auto raw = mov.getSiblingFile ("mov-audio.f32");
+    const auto cmd = "ffmpeg -v error -y -i \"" + mov.getFullPathName() + "\" -map 0:a:0 -f f32le -ac 1 \"" + raw.getFullPathName() + "\"";
+    if (std::system (cmd.toRawUTF8()) != 0)
+        return false;
+
+    juce::MemoryBlock mb;
+    if (! raw.loadFileAsData (mb))
+        return false;
+
+    out.resize (mb.getSize() / sizeof (float));
+    std::memcpy (out.data(), mb.getData(), out.size() * sizeof (float));
+    raw.deleteFile();
+    return true;
+}
+
+void movExport()
+{
+    if (! ffmpegAvailable())
+    {
+        say ("  built without FFmpeg; skipped");
+        return;
+    }
+
+    auto w = makeWorld (1);
+    auto& A = w->add (recordTake (*w->engine, 0, 4.0, performance (301, 4.0), 10.0, true, true));
+    check (A.movOk, "take.mov written after the take stops");
+    const auto mov = A.entry.folder.getChildFile ("take.mov");
+    check (mov.existsAsFile() && mov.getSize() > 10000, "take.mov is on disk (" + juce::String (mov.getSize() / 1024) + " KB)");
+    metric ("take.mov size for 4 s", (double) mov.getSize() / 1024.0, "KB");
+
+    // Another program reads it: ffprobe sees one picture stream and one audio stream.
+    const auto probeOut = A.entry.folder.getChildFile ("probe.txt");
+    const auto cmd = "ffprobe -v error -show_entries stream=codec_name,codec_type,nb_frames,width,height,sample_rate -of csv=p=0 \"" + mov.getFullPathName() + "\" > \"" + probeOut.getFullPathName() + "\"";
+    if (std::system (cmd.toRawUTF8()) == 0)
+    {
+        const auto txt = probeOut.loadFileAsString();
+        say ("  ffprobe: " + txt.replace ("\n", " | "));
+        check (txt.contains ("mjpeg") && txt.contains ("pcm_s16le"), "ffprobe reads an mjpeg picture stream and a pcm audio stream");
+    }
+
+    // Our decoder reads every frame back, and each one is the right picture.
+    for (bool proxy : { false, true })
+    {
+        auto dec = createFfmpegDecoder();
+        check (dec != nullptr && dec->open (A.entry.meta, A.entry.folder, proxy), juce::String ("FFmpeg decoder opens take.mov") + (proxy ? " (proxy size)" : " (full size)"));
+        if (dec == nullptr)
+            continue;
+
+        check (dec->numFrames() == A.entry.meta.numFrames, "frame count matches (" + juce::String (dec->numFrames()) + " of " + juce::String (A.entry.meta.numFrames) + ")");
+        int wrong = 0, label, counter;
+        const auto t0 = juce::Time::getMillisecondCounterHiRes();
+        const auto n = dec->numFrames();
+        for (int i = 0; i < n; ++i)
+        {
+            const auto img = dec->decode (i);
+            if (! decodeCoded (img, label, counter) || label != A.label() || counter != i)
+                ++wrong;
+        }
+        const auto ms = (juce::Time::getMillisecondCounterHiRes() - t0) / std::max (1, n);
+        check (wrong == 0, "every frame decodes to the right picture (" + juce::String (wrong) + " wrong)");
+        metric (juce::String ("FFmpeg decode ") + (proxy ? "proxy" : "full") + " size", ms, "ms per frame");
+
+        // Random access works too, in any order.
+        int badRandom = 0;
+        for (int i : { n - 1, 3, n / 2, 0, n - 2, 7 })
+        {
+            const auto img = dec->decode (i);
+            badRandom += (! decodeCoded (img, label, counter) || counter != i) ? 1 : 0;
+        }
+        check (badRandom == 0, "random access decodes the right frames");
+    }
+
+    // The audio inside the file still carries the sync signal: play it as a moved clip and lock to it.
+    std::vector<float> movSamples;
+    if (movAudio (mov, movSamples))
+    {
+        check (movSamples.size() >= A.audio.size() - 4096, "audio length matches (" + juce::String ((int) movSamples.size()) + " samples)");
+        A.audio = movSamples;
+        keepAndLoad (*w, 0, A);
+        Timeline tl (1);
+        tl.clips[0].push_back (Clip::place (A, 40.0, 1.0, 2.5));
+        const auto s = observe (*w, tl, { { Event::seek, 0.0, 39.5 }, { Event::play, 0.0 } }, 39.5, 5.0, 0);
+        const auto lock = lockTime (s, 0.5);
+        metric ("take.mov audio, moved and trimmed: lock", lock * 1000.0, "ms");
+        check (lock >= 0.0 && lock < 0.5, "a take.mov dropped on a track locks by its embedded signal (" + juce::String (lock, 3) + " s)");
+        int emb = 0, n = 0;
+        for (const auto& x : s)
+            if (x.truth && x.t > 1.2)
+            {
+                ++n;
+                emb += x.kind == SyncKind::embedded ? 1 : 0;
+            }
+        check (n > 0 && emb > n * 0.9, "the embedded source is the one in use (" + juce::String (emb) + "/" + juce::String (n) + ")");
+        report ("take.mov clip", errStats (s, 0.5 + std::max (lock, 0.0) + 0.1, 3.0));
+    }
+    else
+    {
+        check (false, "ffmpeg command line decodes the audio of take.mov");
+    }
+
+    finish (*w);
+}
+
+void movPlayback()
+{
+    if (! ffmpegAvailable())
+    {
+        say ("  built without FFmpeg; skipped");
+        return;
+    }
+
+    auto w = makeWorld (1);
+    auto& A = w->add (recordTake (*w->engine, 0, 5.0, performance (311), 10.0, false, true));
+    check (A.movOk, "take.mov written");
+
+    // Remove the JPEG frames: from here the engine can only play the take from take.mov.
+    A.entry.folder.getChildFile ("frames").deleteRecursively();
+    A.entry.folder.getChildFile ("proxy").deleteRecursively();
+    keepAndLoad (*w, 0, A);
+
+    Timeline tl (1);
+    tl.clips[0].push_back (Clip::place (A, 10.0, 0.0, 5.0));
+    const auto s = observe (*w, tl, { { Event::seek, 0.0, 9.8 }, { Event::loopOn, 0.0, 10.5, 13.5 }, { Event::play, 0.0 } }, 9.8, 8.0, 0);
+    const auto st = errStats (s, 0.5, 7.5);
+    report ("played from take.mov only, with a loop", st);
+    check (st.badFraction < 0.02, "the picture is right (wrong " + juce::String (st.badFraction * 100, 1) + " percent)");
+    check (st.p99 < 50.0, "in sync");
+    const auto ps = w->engine->playerStats (0);
+    metric ("decode mean from take.mov", ps.decodes > 0 ? ps.decodeMsTotal / (double) ps.decodes : 0.0, "ms");
+    finish (*w);
+}
+
 struct Scenario { const char* name; std::function<void()> run; bool inDefaultRun; };
 } // namespace
 
@@ -1274,6 +1414,8 @@ int main (int argc, char** argv)
         { "embedded", embeddedSync, true },
         { "bench", bench, true },
         { "gpu", gpuCompositor, true },
+        { "mov_export", movExport, true },
+        { "mov_playback", movPlayback, true },
         { "soak", [&] { soak (soakSeconds, soakSlots, soakCanvas); }, false },
     };
 

@@ -1,4 +1,6 @@
 #include "TakeRecorder.h"
+
+#include "MovTake.h"
 #include "HostClock.h"
 
 #include <algorithm>
@@ -164,6 +166,37 @@ TakeRecorder::~TakeRecorder()
 {
     if (recording.load())
         stop();
+
+    if (movExport != nullptr)
+        movExport->stopThread (60000);
+}
+
+namespace
+{
+class MovExportThread final : public juce::Thread
+{
+public:
+    MovExportThread (TakeMeta m, juce::File f) : juce::Thread ("take.mov export"), meta (std::move (m)), folder (std::move (f)) {}
+
+    void run() override
+    {
+        juce::String error;
+        ok = exportTakeMov (meta, folder, folder.getChildFile ("take.mov"), error);
+    }
+
+    TakeMeta meta;
+    juce::File folder;
+    bool ok = false;
+};
+} // namespace
+
+bool TakeRecorder::waitForMovExport()
+{
+    if (movExport == nullptr)
+        return false;
+
+    movExport->waitForThreadToExit (120000);
+    return static_cast<MovExportThread&> (*movExport).ok;
 }
 
 bool TakeRecorder::start (int slot, TakeMeta initial, const Config& cfg)
@@ -234,6 +267,18 @@ std::optional<TakeHistory::Entry> TakeRecorder::stop()
     recording = false;
 
     history.finishTake (entry);
+
+    if (config.exportMov && ffmpegAvailable())
+    {
+        if (movExport != nullptr)
+            movExport->stopThread (60000);
+
+        // A copy of the final meta: the export must not read the entry while the UI edits it.
+        auto t = std::make_unique<MovExportThread> (entry.meta, entry.folder);
+        t->startThread (juce::Thread::Priority::background);
+        movExport = std::move (t);
+    }
+
     return entry;
 }
 
