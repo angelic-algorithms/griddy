@@ -24,7 +24,14 @@ std::unique_ptr<VideoDecoder> createFfmpegDecoder() { return nullptr; }
 #if JUCE_MAC
 bool exportTakeMovApple (const TakeMeta&, const juce::File&, const juce::File&, juce::String&); // AVFoundationExport.mm
 bool movExportAvailable() { return true; }
-bool exportTakeMov (const TakeMeta& m, const juce::File& f, const juce::File& o, juce::String& e) { return exportTakeMovApple (m, f, o, e); }
+bool exportTakeMov (const TakeMeta& m, const juce::File& f, const juce::File& o, juce::String& e)
+{
+    e = "apple exporter started";
+    const auto ok = exportTakeMovApple (m, f, o, e);
+    if (! ok && e == "apple exporter started")
+        e = "apple exporter returned false and left no message";
+    return ok;
+}
 #else
 bool movExportAvailable() { return false; }
 bool exportTakeMov (const TakeMeta&, const juce::File&, const juce::File&, juce::String& error) { error = "built without FFmpeg"; return false; }

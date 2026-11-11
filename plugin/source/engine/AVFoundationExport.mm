@@ -50,6 +50,7 @@ bool exportTakeMovApple (const TakeMeta& meta, const juce::File& takeFolder, con
 {
     @autoreleasepool
     {
+        error = "stage 1 (inputs)";
         if (meta.numFrames <= 0 || meta.frameTimes.size() < (size_t) meta.numFrames)
         {
             error = "take has no frames";
@@ -64,6 +65,7 @@ bool exportTakeMovApple (const TakeMeta& meta, const juce::File& takeFolder, con
             return false;
         }
 
+        error = "stage 2 (create writer)";
         const auto tmp = movFile.getSiblingFile (movFile.getFileName() + ".part.mov");
         tmp.deleteFile();
 
@@ -106,6 +108,7 @@ bool exportTakeMovApple (const TakeMeta& meta, const juce::File& takeFolder, con
             return false;
         }
 
+        error = "stage 3 (start writing)";
         [writer addInput: vin];
         [writer addInput: ain];
 
@@ -122,6 +125,7 @@ bool exportTakeMovApple (const TakeMeta& meta, const juce::File& takeFolder, con
         auto videoTime = [&] (int i) { return meta.frameTimes[(size_t) i] + meta.videoOffsetSeconds() + lead; };
         auto audioTime = [&] (int64_t pos) { return (double) (pos + leadSamples) / sr; };
 
+        error = "stage 4 (append samples)";
         int vi = 0;
         int64_t aPos = 0, lastPts = -1;
         const auto totalAudio = (int64_t) audio.size();
@@ -177,6 +181,7 @@ bool exportTakeMovApple (const TakeMeta& meta, const juce::File& takeFolder, con
             }
         }
 
+        error = "stage 5 (finish)";
         [vin markAsFinished];
         [ain markAsFinished];
 
