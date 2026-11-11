@@ -35,6 +35,38 @@ export type Status = {
   camerasAllowed: boolean;
   cameraBlockedReason: string;
   outputSize: string;
+  engine?: EngineStatus;
+};
+
+export type TakeInfo = { id: number; state: "kept" | "review" | "archived"; seconds: number; slip: number; hasMov: boolean };
+
+export type SlotInfo = {
+  slot: number;
+  claimed: boolean;
+  recording: boolean;
+  status: "noTake" | "stopped" | "prior" | "locked" | "held" | "lost";
+  source: "none" | "hostPosition" | "fingerprint" | "embedded";
+  takeId: number;
+  warp: boolean;
+  lockMs: number;
+};
+
+export type Layout = { canvas: number; gap: number; background: string; order: number[] };
+
+export type EngineStatus = {
+  session: string;
+  slot: number;
+  instances: number;
+  recording: boolean;
+  armed: boolean;
+  master: boolean;
+  error: string;
+  slots: SlotInfo[];
+  takes: TakeInfo[][];
+  layout: Layout;
+  framesWritten?: number;
+  framesDropped?: number;
+  audioDropped?: number;
 };
 
 export type SetSlotResult = { ok: boolean; error: string; slots: string[] };
@@ -72,6 +104,12 @@ export const api = {
   getStatus: native<Status>("getStatus"),
   revealOutputFolder: native<boolean>("revealOutputFolder"),
   chooseOutputFolder: native<string>("chooseOutputFolder"),
+  keepTake: native<boolean>("keepTake") as (slot: number, id: number) => Promise<boolean>,
+  retakeTake: native<boolean>("retakeTake") as (slot: number, id: number) => Promise<boolean>,
+  restoreTake: native<boolean>("restoreTake") as (slot: number, id: number) => Promise<boolean>,
+  setSlip: native<boolean>("setSlip") as (slot: number, id: number, seconds: number) => Promise<boolean>,
+  setLayout: native<Layout>("setLayout") as (canvas: number, gap: number, background: string) => Promise<Layout>,
+  swapCells: native<boolean>("swapCells") as (a: number, b: number) => Promise<boolean>,
 };
 
 /** URL of the latest preview JPEG. The query string only defeats caching; C++ ignores it. */
@@ -158,6 +196,8 @@ function boolParam(name: string): BoolParam {
 }
 
 export const params = {
+  slot: intParam("slot", 1, 9, 1),
+  master: boolParam("master"),
   numSlots: intParam("numSlots", 1, 9, 4),
   recordArm: boolParam("recordArm"),
   recordMode: choiceParam("recordMode", ["DAW records", "DAW plays", "Armed"], 0),

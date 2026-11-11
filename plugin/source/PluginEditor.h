@@ -46,6 +46,7 @@ private:
     Hub& hub;
 
     juce::WebSliderRelay slotRelay { ParamIDs::slot };
+    juce::WebToggleButtonRelay masterRelay { ParamIDs::master };
     juce::WebSliderRelay numSlotsRelay { ParamIDs::numSlots };
     juce::WebToggleButtonRelay recordArmRelay { ParamIDs::recordArm };
     juce::WebComboBoxRelay recordModeRelay { ParamIDs::recordMode };
@@ -54,6 +55,7 @@ private:
     std::unique_ptr<juce::WebBrowserComponent> browser;
 
     juce::WebSliderParameterAttachment slotAttachment;
+    juce::WebToggleButtonParameterAttachment masterAttachment;
     juce::WebSliderParameterAttachment numSlotsAttachment;
     juce::WebToggleButtonParameterAttachment recordArmAttachment;
     juce::WebComboBoxParameterAttachment recordModeAttachment;

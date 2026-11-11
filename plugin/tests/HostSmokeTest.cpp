@@ -223,6 +223,32 @@ int main (int argc, char** argv)
             check (slotFolders.joinIntoString (",") == "slot1,slot2", "the takes landed in slots 1 and 2 (" + slotFolders.joinIntoString (",") + ")");
         }
 
+        // Master mode: the second instance gives up its cell and arranges the grid instead.
+        for (auto* param : second->getParameters())
+            if (param->getName (64) == "Master")
+                param->setValueNotifyingHost (1.0f);
+
+        pumpMessages (500);
+        auto third = load (fm, *types[0]);
+        if (third == nullptr)
+            return 1;
+
+        third->prepareToPlay (48000.0, 512);
+        pumpMessages (500);
+        check (slotOf (*plugin) == "1" && slotOf (*third) == "2", "a master frees its cell for the next track (" + slotOf (*plugin) + " and " + slotOf (*third) + ")");
+
+        // Only one master at a time: asking for a second one switches it back off.
+        for (auto* param : third->getParameters())
+            if (param->getName (64) == "Master")
+                param->setValueNotifyingHost (1.0f);
+
+        pumpMessages (500);
+        bool thirdIsMaster = false;
+        for (auto* param : third->getParameters())
+            if (param->getName (64) == "Master")
+                thirdIsMaster = param->getValue() > 0.5f;
+        check (! thirdIsMaster, "a second master is refused");
+
         // Editor: create the WebView UI, let it load, then tear it down.
         {
             std::unique_ptr<AudioProcessorEditor> editor (plugin->createEditorAndMakeActive());

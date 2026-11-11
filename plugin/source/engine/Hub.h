@@ -17,6 +17,15 @@
 namespace griddy
 {
 
+/** How the shared grid looks. Changing it changes the picture, never the takes. */
+struct GridLayout
+{
+    Canvas canvas = Canvas::hd720;
+    float gap = 4.0f;                 // pixels between cells at the canvas size
+    uint32_t background = 0xff0b0b0fu;
+    std::array<int, 9> order { 0, 1, 2, 3, 4, 5, 6, 7, 8 }; // which slot sits in each cell, in reading order
+};
+
 /** What one Griddy instance (one plugin on one track) tells the hub.
     The instance's parameters are read through these pointers, so DAW automation and the UI reach the hub without locks. */
 struct MemberControls
@@ -25,7 +34,9 @@ struct MemberControls
     std::atomic<float>* recordArm = nullptr;
     std::atomic<float>* recordMode = nullptr; // 0 DAW records, 1 and 2 DAW plays
     std::atomic<float>* cameras = nullptr;    // smallest grid this instance wants to see
+    std::atomic<float>* master = nullptr;     // on: no slot, this instance is the one that arranges the grid
     std::function<void (int)> setSlotParameter; // message thread: show a slot (0 based) in the instance's own parameter
+    std::function<void (bool)> setMasterParameter;
 };
 
 /** One plugin instance as the hub sees it. Created and destroyed by Hub, used by that instance's threads. */
@@ -45,6 +56,9 @@ struct Member
 
     // Control thread only.
     bool recording = false;
+    std::atomic<bool> isMaster { false };
+    int pendingMasterParam = -1;
+    bool masterQueued = false;
     uint64_t lastCameraSerial = 0;
     int pendingParamSlot = -1;
     bool paramQueued = false;
@@ -95,6 +109,13 @@ public:
     bool restoreTake (int slot, int takeId);
     bool setSlip (int slot, int takeId, double seconds);
 
+    // ---- grid layout (any instance can change it; the master instance is where the UI puts these controls) ----
+    GridLayout getLayout() const;
+    void setLayout (Canvas canvas, float gap, uint32_t background);
+    bool swapCells (int a, int b);
+    juce::var layoutToVar() const;
+    void applyLayoutVar (const juce::var& v);
+
     juce::var getStatus (const Member* member) const;
     juce::MemoryBlock getPreviewJpeg() const;
     int64_t getPreviewSerial() const noexcept { return previewSerial.load(); }
@@ -137,6 +158,9 @@ private:
     std::array<std::atomic<bool>, maxSlots> slotBusy;
     std::array<std::atomic<bool>, maxSlots> slotRecording;
     std::array<std::atomic<uint64_t>, maxSlots> droppedFrames, droppedAudio;
+
+    mutable std::mutex layoutLock;
+    GridLayout layout;
 
     juce::ThreadPool worker { 1 };
 

@@ -26,11 +26,15 @@ public:
     /** Pixels of dark gap between cells, at the output resolution. */
     void setGapPixels (float g) noexcept { gap = g; }
 
+    /** The colour behind and between the cells, as 0xAARRGGBB. */
+    void setBackground (uint32_t argb) noexcept { background = argb; }
+
     /** Scale and crop so the frame fills the cell without stretching (like CSS object-fit: cover). */
     static juce::AffineTransform coverTransform (juce::Rectangle<int> source, juce::Rectangle<float> target);
 
 private:
     float gap = 4.0f;
+    uint32_t background = 0xff0b0b0fu;
 };
 
 } // namespace griddy

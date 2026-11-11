@@ -92,3 +92,30 @@ select { width: 100%; }
   .main { grid-template-columns: 1fr; overflow-y: auto; }
   .side { border-left: 0; border-top: 1px solid var(--line); overflow: visible; }
 }
+
+.chip { align-self: flex-start; padding: 3px 10px; border-radius: 999px; background: var(--panel-2); border: 1px solid var(--line); font-size: 12px; }
+.chip.ok { border-color: var(--play); color: var(--play); }
+.chip.warn { border-color: #e0a030; color: #e0a030; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.ghost.on { border-color: var(--accent); color: var(--accent); }
+.takes { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.take { background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; padding: 8px; display: flex; flex-direction: column; gap: 8px; }
+.take.kept { border-color: var(--accent); }
+.take-head { display: flex; align-items: center; gap: 8px; }
+.take-name { font-weight: 600; margin-right: auto; }
+.badge { font-size: 11px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line); text-transform: capitalize; }
+.badge.kept { border-color: var(--accent); color: var(--accent); }
+.badge.review { border-color: #e0a030; color: #e0a030; }
+.badge.live { border-color: var(--rec); color: var(--rec); }
+.slip { display: flex; align-items: center; gap: 6px; margin-left: auto; }
+.slip span { min-width: 7ch; text-align: center; font-variant-numeric: tabular-nums; }
+.slip button { width: 28px; padding: 3px 0; }
+.slotlist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.slotlist li { display: flex; align-items: center; gap: 8px; }
+.swatches { display: flex; gap: 8px; }
+.swatch { width: 26px; height: 26px; padding: 0; border-radius: 50%; }
+.swatch.on { outline: 2px solid var(--accent); outline-offset: 2px; }
+.cells { display: grid; gap: 6px; }
+.cells button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+input[type="range"] { width: 100%; accent-color: var(--accent); }
+.preview { aspect-ratio: auto; }

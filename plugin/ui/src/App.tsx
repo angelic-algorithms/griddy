@@ -1,4 +1,6 @@
 import { api, params, Status, Transport } from "./bridge";
+import { LayoutPanel } from "./Layout";
+import { SyncChip, Takes } from "./Takes";
 import { Controls, RecordControls } from "./Controls";
 import { useBackendEvent, useParam } from "./hooks";
 import { Preview } from "./Preview";
@@ -38,6 +40,32 @@ function ArmButton({ recording }: { recording: boolean }) {
   );
 }
 
+function SlotPicker({ slot, instances }: { slot: number; instances: number }) {
+  const value = useParam(params.slot);
+  const { min, max } = params.slot.range();
+  return (
+    <div className="field">
+      <span className="field-label">This track's cell</span>
+      <div className="stepper">
+        <button onClick={() => params.slot.set(Math.max(min, value - 1))} aria-label="Earlier cell">−</button>
+        <span>{slot >= 0 ? slot + 1 : value}</span>
+        <button onClick={() => params.slot.set(Math.min(max, value + 1))} aria-label="Later cell">+</button>
+        <span className="muted">{instances} {instances === 1 ? "track" : "tracks"} in this set</span>
+      </div>
+    </div>
+  );
+}
+
+function MasterToggle() {
+  const on = useParam(params.master);
+  return (
+    <button className={`ghost ${on ? "on" : ""}`} aria-pressed={on} onClick={() => params.master.set(!on)}
+      title="Master: arrange the grid and see every slot. A master has no cell of its own.">
+      {on ? "Master view" : "Master"}
+    </button>
+  );
+}
+
 function fileName(path: string) {
   return path.split(/[\\/]/).pop() ?? path;
 }
@@ -51,7 +79,8 @@ export function App() {
       <header className="topbar">
         <h1>Griddy</h1>
         <TransportBar t={transport} />
-        <ArmButton recording={false} />
+        <MasterToggle />
+        {!status.engine?.master && <ArmButton recording={!!status.engine?.recording} />}
       </header>
 
       {!status.camerasAllowed && status.cameraBlockedReason && (
@@ -69,6 +98,32 @@ export function App() {
         </div>
 
         <aside className="side">
+          {status.engine && !status.engine.master && (
+            <>
+              <section className="panel">
+                <h2>This track</h2>
+                <SlotPicker slot={status.engine.slot} instances={status.engine.instances} />
+              </section>
+              <Takes engine={status.engine} />
+            </>
+          )}
+          {status.engine?.master && (
+            <>
+              <section className="panel">
+                <h2>Every slot</h2>
+                <ul className="slotlist">
+                  {status.engine.slots.map((s) => (
+                    <li key={s.slot}>
+                      <span className="slot-num">{s.slot + 1}</span>
+                      <SyncChip slot={s} />
+                      {!s.claimed && <span className="muted">no track</span>}
+                    </li>
+                  ))}
+                </ul>
+              </section>
+              <LayoutPanel engine={status.engine} />
+            </>
+          )}
           <Controls />
           <Slots camerasAllowed={status.camerasAllowed} />
           <RecordControls />

@@ -62,6 +62,38 @@ export function createMock() {
         }
         case "getStatus":
           return status();
+        case "keepTake": {
+          const [, id] = args as [number, number];
+          takes = takes.map((t) => (t.id === id ? { ...t, state: "kept" } : t.state === "kept" ? { ...t, state: "archived" } : t));
+          return true;
+        }
+        case "retakeTake": {
+          const [, id] = args as [number, number];
+          takes = takes.filter((t) => t.id !== id);
+          return true;
+        }
+        case "restoreTake": {
+          const [, id] = args as [number, number];
+          takes = takes.map((t) => (t.id === id ? { ...t, state: "kept" } : t.state === "kept" ? { ...t, state: "archived" } : t));
+          return true;
+        }
+        case "setSlip": {
+          const [, id, seconds] = args as [number, number, number];
+          takes = takes.map((t) => (t.id === id ? { ...t, slip: seconds } : t));
+          return true;
+        }
+        case "setLayout": {
+          const [canvas, gap, background] = args as [number, number, string];
+          layout = { ...layout, canvas, gap, background };
+          return layout;
+        }
+        case "swapCells": {
+          const [a, b] = args as [number, number];
+          const order = [...layout.order];
+          [order[a], order[b]] = [order[b], order[a]];
+          layout = { ...layout, order };
+          return true;
+        }
         case "chooseOutputFolder":
           outputFolder = "/Users/you/Desktop/Griddy takes";
           return outputFolder;
@@ -83,8 +115,27 @@ export function createMock() {
     bool: () => store(false),
   };
 
+  let layout = { canvas: 0, gap: 4, background: "0b0b0f", order: [0, 1, 2, 3, 4, 5, 6, 7, 8] };
+  let takes = [
+    { id: 3, state: "review", seconds: 12.4, slip: 0, hasMov: true },
+    { id: 2, state: "kept", seconds: 12.1, slip: 0.02, hasMov: true },
+    { id: 1, state: "archived", seconds: 11.8, slip: 0, hasMov: false },
+  ];
+  function engineStatus() {
+    return {
+      session: "mock", slot: 0, instances: 1, recording: false, armed: false, master: false, error: "",
+      slots: [0, 1, 2, 3].map((slot) => ({
+        slot, claimed: slot === 0, recording: false, status: slot === 0 ? "locked" : "prior",
+        source: slot === 0 ? "fingerprint" : "hostPosition", takeId: slot === 0 ? 2 : -1, warp: false, lockMs: 180,
+      })),
+      takes: [takes, [], [], []],
+      layout,
+    };
+  }
+
   function status() {
     return {
+      engine: engineStatus(),
       outputFolder,
       lastTake: "",
       lastError: "",

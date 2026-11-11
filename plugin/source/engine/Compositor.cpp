@@ -108,7 +108,7 @@ void Compositor::render (juce::Image& output, const std::vector<Cell>& cells, co
 
     {
         const juce::Image::BitmapData bd (output, juce::Image::BitmapData::writeOnly);
-        const uint32_t bg = 0xff0b0b0fu;
+        const uint32_t bg = background;
         for (int y = 0; y < bd.height; ++y)
         {
             auto* row = reinterpret_cast<uint32_t*> (bd.getLinePointer (y));

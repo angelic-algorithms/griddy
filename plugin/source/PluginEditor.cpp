@@ -20,6 +20,7 @@ GriddyEditor::GriddyEditor (GriddyProcessor& p)
       hub (p.getHub()),
       browser (std::make_unique<juce::WebBrowserComponent> (makeBrowserOptions())),
       slotAttachment (param (p, ParamIDs::slot), slotRelay, nullptr),
+      masterAttachment (param (p, ParamIDs::master), masterRelay, nullptr),
       numSlotsAttachment (param (p, ParamIDs::numSlots), numSlotsRelay, nullptr),
       recordArmAttachment (param (p, ParamIDs::recordArm), recordArmRelay, nullptr),
       recordModeAttachment (param (p, ParamIDs::recordMode), recordModeRelay, nullptr)
@@ -57,6 +58,7 @@ juce::WebBrowserComponent::Options GriddyEditor::makeBrowserOptions()
         .withNativeIntegrationEnabled()
         .withKeepPageLoadedWhenBrowserIsHidden()
         .withOptionsFrom (slotRelay)
+        .withOptionsFrom (masterRelay)
         .withOptionsFrom (numSlotsRelay)
         .withOptionsFrom (recordArmRelay)
         .withOptionsFrom (recordModeRelay)
@@ -83,6 +85,18 @@ juce::WebBrowserComponent::Options GriddyEditor::makeBrowserOptions()
         .withNativeFunction ("getStatus", [this] (const juce::Array<juce::var>&, auto complete)
         {
             complete (statusToVar());
+        })
+        .withNativeFunction ("setLayout", [this] (const juce::Array<juce::var>& args, auto complete)
+        {
+            if (args.size() > 2)
+                hub.setLayout ((Canvas) juce::jlimit (0, 3, (int) args[0]), (float) (double) args[1],
+                               (uint32_t) args[2].toString().getHexValue32());
+
+            complete (hub.layoutToVar());
+        })
+        .withNativeFunction ("swapCells", [this] (const juce::Array<juce::var>& args, auto complete)
+        {
+            complete (args.size() > 1 && hub.swapCells ((int) args[0], (int) args[1]));
         })
         .withNativeFunction ("keepTake", [this] (const juce::Array<juce::var>& args, auto complete)
         {

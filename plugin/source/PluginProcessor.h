@@ -11,6 +11,7 @@ namespace griddy
 namespace ParamIDs
 {
     inline constexpr auto slot       = "slot";
+    inline constexpr auto master     = "master";
     inline constexpr auto numSlots   = "numSlots";
     inline constexpr auto recordArm  = "recordArm";
     inline constexpr auto recordMode = "recordMode";

@@ -111,7 +111,8 @@ void Hub::removeMember (Member* member)
 
 void Hub::settleSlots()
 {
-    std::vector<std::pair<Member*, int>> toShow;
+    struct Show { Member* m; int slot; int master; };
+    std::vector<Show> toShow;
     {
         const std::scoped_lock sl (memberLock);
         uint32_t mask = 0;
@@ -121,13 +122,47 @@ void Hub::settleSlots()
 
         for (auto& m : members)
         {
+            // Master mode: no slot, no audio, no recording. Only one instance can be the master.
+            const auto wantMaster = m->controls.master != nullptr && m->controls.master->load() > 0.5f;
+
+            if (wantMaster == m->isMaster.load())
+                m->masterQueued = false;
+            else if (wantMaster)
+            {
+                bool other = false;
+                for (auto& o : members)
+                    other = other || (o.get() != m.get() && o->isMaster.load());
+
+                const auto current = m->slot.load();
+                if (other || (current >= 0 && slotRecording[(size_t) current].load()))
+                    m->pendingMasterParam = 0; // not now: put the switch back
+                else
+                {
+                    m->isMaster = true;
+                    m->slot = -1;
+                    m->masterQueued = false;
+                }
+            }
+            else
+            {
+                const auto free = firstFreeSlot();
+                if (free < 0)
+                    m->pendingMasterParam = 1; // no cell left to go back to
+                else
+                {
+                    m->isMaster = false;
+                    m->slot = free;
+                    m->pendingParamSlot = free;
+                }
+            }
+
             const auto current = m->slot.load();
             const auto wanted = readInt (m->controls.slot, current + 1) - 1;
 
             if (wanted == current)
                 m->paramQueued = false;
 
-            if (current >= 0 && wanted != current && juce::isPositiveAndBelow (wanted, maxSlots))
+            if (! m->isMaster && current >= 0 && wanted != current && juce::isPositiveAndBelow (wanted, maxSlots))
             {
                 bool taken = false;
                 for (auto& o : members)
@@ -140,13 +175,15 @@ void Hub::settleSlots()
                     m->pendingParamSlot = current; // put the parameter back
             }
 
-            if (m->pendingParamSlot >= 0 && ! m->paramQueued)
+            if ((m->pendingParamSlot >= 0 && ! m->paramQueued) || (m->pendingMasterParam >= 0 && ! m->masterQueued))
             {
-                toShow.emplace_back (m.get(), m->pendingParamSlot);
-                m->paramQueued = true;
+                toShow.push_back ({ m.get(), m->pendingParamSlot, m->pendingMasterParam });
+                m->paramQueued = m->paramQueued || m->pendingParamSlot >= 0;
+                m->masterQueued = m->masterQueued || m->pendingMasterParam >= 0;
             }
 
             m->pendingParamSlot = -1;
+            m->pendingMasterParam = -1;
 
             if (const auto s = m->slot.load(); s >= 0)
             {
@@ -157,8 +194,10 @@ void Hub::settleSlots()
                     lead = m.get();
                 }
 
-                cameras = juce::jmax (cameras, s + 1, readInt (m->controls.cameras, 1));
+                cameras = juce::jmax (cameras, s + 1);
             }
+
+            cameras = juce::jmax (cameras, readInt (m->controls.cameras, 1));
         }
 
         claimedMask = mask;
@@ -167,19 +206,26 @@ void Hub::settleSlots()
     }
 
     // Parameters belong to the message thread. The member may be gone by then, so look it up again.
-    for (const auto& [m, slot] : toShow)
-        juce::MessageManager::callAsync ([this, m = m, slot = slot]
+    for (const auto& show : toShow)
+        juce::MessageManager::callAsync ([this, show]
         {
-            std::function<void (int)> fn;
+            std::function<void (int)> slotFn;
+            std::function<void (bool)> masterFn;
             {
                 const std::scoped_lock sl (memberLock);
                 for (auto& x : members)
-                    if (x.get() == m)
-                        fn = x->controls.setSlotParameter;
+                    if (x.get() == show.m)
+                    {
+                        slotFn = x->controls.setSlotParameter;
+                        masterFn = x->controls.setMasterParameter;
+                    }
             }
 
-            if (fn)
-                fn (slot);
+            if (show.slot >= 0 && slotFn)
+                slotFn (show.slot);
+
+            if (show.master >= 0 && masterFn)
+                masterFn (show.master != 0);
         });
 }
 
@@ -482,6 +528,78 @@ void Hub::finishTake (int slot)
     }
 }
 
+GridLayout Hub::getLayout() const
+{
+    const std::scoped_lock sl (layoutLock);
+    return layout;
+}
+
+void Hub::setLayout (Canvas canvas, float gap, uint32_t background)
+{
+    const std::scoped_lock sl (layoutLock);
+    layout.canvas = canvas;
+    layout.gap = juce::jlimit (0.0f, 48.0f, gap);
+    layout.background = background | 0xff000000u;
+}
+
+bool Hub::swapCells (int a, int b)
+{
+    const auto active = activeSlots.load();
+
+    if (! juce::isPositiveAndBelow (a, active) || ! juce::isPositiveAndBelow (b, active))
+        return false;
+
+    const std::scoped_lock sl (layoutLock);
+    std::swap (layout.order[(size_t) a], layout.order[(size_t) b]);
+    return true;
+}
+
+juce::var Hub::layoutToVar() const
+{
+    const auto l = getLayout();
+    auto o = std::make_unique<juce::DynamicObject>();
+    o->setProperty ("canvas", (int) l.canvas);
+    o->setProperty ("gap", (double) l.gap);
+    o->setProperty ("background", juce::String::toHexString ((int) (l.background & 0xffffffu)).paddedLeft ('0', 6));
+
+    juce::Array<juce::var> order;
+    for (auto v : l.order)
+        order.add (v);
+    o->setProperty ("order", order);
+    return juce::var (o.release());
+}
+
+void Hub::applyLayoutVar (const juce::var& v)
+{
+    if (! v.isObject())
+        return;
+
+    const auto canvas = juce::jlimit (0, 3, (int) v.getProperty ("canvas", 0));
+    const auto gap = (float) (double) v.getProperty ("gap", 4.0);
+    const auto bg = (uint32_t) juce::String (v.getProperty ("background", "0b0b0f")).getHexValue32();
+    setLayout ((Canvas) canvas, gap, bg);
+
+    if (const auto* order = v.getProperty ("order", {}).getArray(); order != nullptr && order->size() == 9)
+    {
+        std::array<int, 9> parsed {};
+        uint32_t seen = 0;
+        bool ok = true;
+
+        for (int i = 0; i < 9; ++i)
+        {
+            parsed[(size_t) i] = (int) (*order)[i];
+            ok = ok && juce::isPositiveAndBelow (parsed[(size_t) i], 9) && (seen & (1u << parsed[(size_t) i])) == 0;
+            seen |= 1u << juce::jlimit (0, 8, parsed[(size_t) i]);
+        }
+
+        if (ok)
+        {
+            const std::scoped_lock sl (layoutLock);
+            layout.order = parsed;
+        }
+    }
+}
+
 void Hub::drawPreview()
 {
     PlaybackEngine* e = nullptr;
@@ -493,7 +611,37 @@ void Hub::drawPreview()
     if (e == nullptr)
         return;
 
-    const auto cells = computeLayout (activeSlots.load());
+    const auto active = activeSlots.load();
+    const auto look = getLayout();
+
+    // The canvas can change under us (aspect ratio): redraw into images of the right shape.
+    const auto size = canvasSize (look.canvas);
+    if (output.getWidth() != size.x || output.getHeight() != size.y)
+    {
+        output = juce::Image (juce::Image::ARGB, size.x, size.y, true, juce::SoftwareImageType());
+        previewImage = juce::Image (juce::Image::ARGB, VideoEngine::previewWidth,
+                                    juce::jmax (16, (int) std::lround ((double) VideoEngine::previewWidth * size.y / size.x)),
+                                    true, juce::SoftwareImageType());
+    }
+
+    compositor.setGapPixels (look.gap * (float) size.x / 1280.0f);
+    compositor.setBackground (look.background);
+
+    // The cell order is only honoured if it is a real permutation of the active slots.
+    auto cells = computeLayout (active);
+    {
+        uint32_t seen = 0;
+        bool valid = true;
+        for (int i = 0; i < active; ++i)
+        {
+            valid = valid && juce::isPositiveAndBelow (look.order[(size_t) i], active) && (seen & (1u << look.order[(size_t) i])) == 0;
+            seen |= 1u << juce::jlimit (0, 8, look.order[(size_t) i]);
+        }
+
+        if (valid)
+            for (auto& c : cells)
+                c.slot = look.order[(size_t) c.slot];
+    }
 
     compositor.render (output, cells, [&] (int slot) -> std::shared_ptr<const VideoFrame>
     {
@@ -593,6 +741,8 @@ juce::var Hub::getStatus (const Member* member) const
     obj->setProperty ("armed", member != nullptr && member->controls.recordArm != nullptr && member->controls.recordArm->load() > 0.5f);
     obj->setProperty ("sampleRate", sampleRate);
     obj->setProperty ("claimedMask", (int) claimedMask.load());
+    obj->setProperty ("master", member != nullptr && member->isMaster.load());
+    obj->setProperty ("layout", layoutToVar());
 
     {
         const std::scoped_lock sl (statusLock);

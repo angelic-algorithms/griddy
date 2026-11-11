@@ -11,6 +11,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout GriddyProcessor::createParam
 
     layout.add (std::make_unique<AudioParameterInt> (ParameterID { ParamIDs::slot, 1 }, "Slot", 1, Hub::maxSlots, 1));
 
+    layout.add (std::make_unique<AudioParameterBool> (ParameterID { ParamIDs::master, 1 }, "Master", false));
+
     layout.add (std::make_unique<AudioParameterInt> (ParameterID { ParamIDs::numSlots, 1 }, "Cameras",
                                                      1, VideoEngine::maxSlots, 4));
 
@@ -30,6 +32,7 @@ GriddyProcessor::GriddyProcessor()
     MemberControls controls;
     controls.slot       = parameters.getRawParameterValue (ParamIDs::slot);
     controls.cameras    = parameters.getRawParameterValue (ParamIDs::numSlots);
+    controls.master     = parameters.getRawParameterValue (ParamIDs::master);
     controls.recordArm  = parameters.getRawParameterValue (ParamIDs::recordArm);
     controls.recordMode = parameters.getRawParameterValue (ParamIDs::recordMode);
 
@@ -38,6 +41,12 @@ GriddyProcessor::GriddyProcessor()
     {
         if (auto* p = parameters.getParameter (ParamIDs::slot))
             p->setValueNotifyingHost (p->convertTo0to1 ((float) (slot + 1)));
+    };
+
+    controls.setMasterParameter = [this] (bool on)
+    {
+        if (auto* p = parameters.getParameter (ParamIDs::master))
+            p->setValueNotifyingHost (on ? 1.0f : 0.0f);
     };
 
     member = hub->addMember (controls);
@@ -120,6 +129,7 @@ void GriddyProcessor::getStateInformation (juce::MemoryBlock& destData)
     state.setProperty ("source", slot >= 0 ? sources[(size_t) slot] : juce::String(), nullptr);
     state.setProperty ("outputFolder", hub->video().getOutputFolder().getFullPathName(), nullptr);
     state.setProperty ("session", hub->getSession(), nullptr);
+    state.setProperty ("layout", juce::JSON::toString (hub->layoutToVar(), true), nullptr);
 
     if (auto xml = state.createXml())
         copyXmlToBinary (*xml, destData);
@@ -137,6 +147,9 @@ void GriddyProcessor::setStateInformation (const void* data, int sizeInBytes)
 
     if (const auto folder = state.getProperty ("outputFolder").toString(); juce::File::isAbsolutePath (folder))
         hub->video().setOutputFolder (juce::File (folder));
+
+    if (const auto layout = state.getProperty ("layout").toString(); layout.isNotEmpty())
+        hub->applyLayoutVar (juce::JSON::parse (layout));
 
     // All instances of one project carry the same session id. The first one to load decides it.
     hub->setSession (state.getProperty ("session").toString());
