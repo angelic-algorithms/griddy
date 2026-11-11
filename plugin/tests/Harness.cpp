@@ -1334,7 +1334,16 @@ void movExport()
             int wrong = 0, label, counter;
             const auto t0 = juce::Time::getMillisecondCounterHiRes();
             for (int i = 0; i < n; ++i)
-                wrong += (! decodeCoded (dec->decode (i), label, counter) || label != A.label() || counter != i) ? 1 : 0;
+            {
+                auto img = dec->decode (i);
+                const bool ok = decodeCoded (img, label, counter);
+                if ((! ok || label != A.label() || counter != i) && i < 4)
+                    say ("    platform frame " + juce::String (i) + ": image " + juce::String (img.getWidth()) + "x" + juce::String (img.getHeight())
+                         + (img.isValid() ? juce::String (" px0 ") + img.getPixelAt (5, 5).toDisplayString (true) + " px1 " + img.getPixelAt (img.getWidth() / 2, img.getHeight() / 2).toDisplayString (true) : juce::String (" (invalid)"))
+                         + ", decoded " + (ok ? "yes" : "no") + " label " + juce::String (label) + " counter " + juce::String (counter)
+                         + " (want label " + juce::String (A.label()) + " counter " + juce::String (i) + ")");
+                wrong += (! ok || label != A.label() || counter != i) ? 1 : 0;
+            }
             metric (juce::String ("platform decode ") + (proxy ? "proxy" : "full") + " size, sequential", (juce::Time::getMillisecondCounterHiRes() - t0) / std::max (1, n), "ms per frame");
             check (wrong == 0, "platform decoder: every frame is the right picture (" + juce::String (wrong) + " wrong)");
 
