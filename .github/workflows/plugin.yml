@@ -50,7 +50,7 @@ jobs:
           for f in ~/Library/Logs/DiagnosticReports/GriddyHostSmokeTest*; do echo "=== $f"; head -c 12000 "$f"; done || true
 
       - name: Decoders and exporter (gate, not timing sensitive)
-        run: ./build/GriddyHarness_artefacts/Release/GriddyHarness mov_export
+        run: GRIDDY_DEBUG_DECODER=1 ./build/GriddyHarness_artefacts/Release/GriddyHarness mov_export
 
       - name: GPU compositor against the CPU reference (numbers only)
         continue-on-error: true

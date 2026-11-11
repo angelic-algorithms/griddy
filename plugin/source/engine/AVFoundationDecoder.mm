@@ -3,6 +3,8 @@
 // Either way the work is Apple's code, which is the point: no FFmpeg needed on a Mac.
 //
 // Compiled with ARC (see CMakeLists.txt).
+#include <cstdlib>
+#include <cstdio>
 #include "VideoDecoder.h"
 
 #if JUCE_MAC
@@ -52,6 +54,16 @@ public:
             {
                 stamps.push_back (CMTimeGetSeconds (CMSampleBufferGetPresentationTimeStamp (sb)));
                 CFRelease (sb);
+            }
+
+            if (std::getenv ("GRIDDY_DEBUG_DECODER") != nullptr)
+            {
+                fprintf (stderr, "[avf] %d samples, track duration %.3f, nominal fps %.2f, size %.0fx%.0f\n", (int) stamps.size(),
+                         CMTimeGetSeconds (track.timeRange.duration), (double) track.nominalFrameRate, track.naturalSize.width, track.naturalSize.height);
+                for (size_t i = 0; i < stamps.size() && i < 8; ++i)
+                    fprintf (stderr, "[avf]  stamp %zu = %.4f\n", i, stamps[i]);
+                for (size_t i = stamps.size() > 4 ? stamps.size() - 4 : 0; i < stamps.size(); ++i)
+                    fprintf (stderr, "[avf]  stamp %zu = %.4f\n", i, stamps[i]);
             }
 
             std::sort (stamps.begin(), stamps.end());
