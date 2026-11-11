@@ -76,7 +76,7 @@ class AVFoundationSource final : public CaptureSource
 public:
     AVFoundationSource (FrameStore& s, AVCaptureDevice* d)
         : CaptureSource (s), device (d),
-          id ("av:" + juce::String ([[d uniqueID] UTF8String])),
+          sourceId ("av:" + juce::String ([[d uniqueID] UTF8String])),
           name ([[d localizedName] UTF8String])
     {
         queue = dispatch_queue_create ("com.parkangel.griddy.capture", DISPATCH_QUEUE_SERIAL);
@@ -84,7 +84,7 @@ public:
 
     ~AVFoundationSource() override { stop(); }
 
-    juce::String getId() const override   { return id; }
+    juce::String getId() const override   { return sourceId; }
     juce::String getName() const override { return name; }
 
     bool start (juce::String& error) override
@@ -155,7 +155,7 @@ public:
         session = nil;
         output = nil;
         delegate = nil;
-        store.remove (id);
+        store.remove (sourceId);
     }
 
 private:
@@ -183,7 +183,7 @@ private:
 
         CVPixelBufferUnlockBaseAddress (pixels, kCVPixelBufferLock_ReadOnly);
 
-        store.push (id, std::move (image), juce::Time::getMillisecondCounterHiRes() / 1000.0);
+        store.push (sourceId, std::move (image), juce::Time::getMillisecondCounterHiRes() / 1000.0);
     }
 
     AVCaptureDevice* device = nil;
@@ -191,7 +191,8 @@ private:
     AVCaptureVideoDataOutput* output = nil;
     GriddyParkAngelFrameDelegate* delegate = nil;
     dispatch_queue_t queue;
-    juce::String id, name;
+    // Not called "id": inside Objective-C++ that would hide the Objective-C type id.
+    juce::String sourceId, name;
 };
 
 std::unique_ptr<CaptureSource> createAVFoundationSource (const juce::String& uniqueId, FrameStore& store)
