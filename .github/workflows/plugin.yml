@@ -1,0 +1,90 @@
+# Builds and tests Griddy on every push. The macOS job is the important one:
+# it compiles the AVFoundation camera and recorder code and the AU, which
+# can't be built on Linux, and runs Apple's own AU validator (auval).
+# The plugin lives in plugin/, so every step runs there.
+name: plugin
+
+on:
+  push:
+    paths: ["plugin/**", ".github/workflows/plugin.yml"]
+  pull_request:
+    paths: ["plugin/**", ".github/workflows/plugin.yml"]
+
+defaults:
+  run:
+    working-directory: plugin
+
+jobs:
+  macos:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Ninja
+        run: brew install ninja || true
+
+      - name: Build the web UI
+        working-directory: plugin/ui
+        run: npm ci && npm run build
+
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build VST3, AU, CLAP, Standalone and tests
+        run: cmake --build build --parallel
+
+      - name: Engine unit tests
+        run: ./build/GriddyTests_artefacts/Release/GriddyTests
+
+      - name: Fake DAW smoke test (loads the VST3)
+        run: ./build/GriddyHostSmokeTest_artefacts/Release/GriddyHostSmokeTest build/Griddy_artefacts/Release/VST3/Griddy.vst3
+
+      - name: Apple AU validation
+        run: |
+          mkdir -p ~/Library/Audio/Plug-Ins/Components
+          cp -R build/Griddy_artefacts/Release/AU/Griddy.component ~/Library/Audio/Plug-Ins/Components/
+          killall -9 AudioComponentRegistrar || true
+          auval -v aufx Grdy Pkag
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Griddy-macOS-unsigned
+          path: |
+            plugin/build/Griddy_artefacts/Release/VST3/Griddy.vst3
+            plugin/build/Griddy_artefacts/Release/AU/Griddy.component
+            plugin/build/Griddy_artefacts/Release/CLAP/Griddy.clap
+            plugin/build/Griddy_artefacts/Release/Standalone/Griddy.app
+
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install JUCE dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libasound2-dev libjack-jackd2-dev libfreetype-dev \
+            libfontconfig1-dev libx11-dev libxcomposite-dev libxcursor-dev libxext-dev libxinerama-dev \
+            libxrandr-dev libxrender-dev libwebkit2gtk-4.1-dev libgtk-3-dev libglu1-mesa-dev xvfb
+
+      - name: Build the web UI
+        working-directory: plugin/ui
+        run: npm ci && npm run build
+
+      - name: Configure and build
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --parallel
+
+      - name: Tests
+        run: |
+          ./build/GriddyTests_artefacts/Release/GriddyTests
+          xvfb-run -a ./build/GriddyHostSmokeTest_artefacts/Release/GriddyHostSmokeTest build/Griddy_artefacts/Release/VST3/Griddy.vst3
