@@ -3,6 +3,7 @@
 // Either way the work is Apple's code, which is the point: no FFmpeg needed on a Mac.
 //
 // Compiled with ARC (see CMakeLists.txt).
+#include <cmath>
 #include <cstdlib>
 #include <cstdio>
 #include "VideoDecoder.h"
@@ -23,6 +24,12 @@ namespace
 class AVFoundationDecoder final : public VideoDecoder
 {
 public:
+    ~AVFoundationDecoder() override
+    {
+        if (stash != nullptr)
+            CFRelease (stash);
+    }
+
     bool open (const TakeMeta& meta, const juce::File& takeFolder, bool useProxy) override
     {
         @autoreleasepool
@@ -89,8 +96,18 @@ public:
                 if (! startReader (index))
                     return {};
 
+            const bool fresh = (reader == nil) || index != lastIndex + 1;
+            (void) fresh;
             lastIndex = index;
-            CMSampleBufferRef sb = [output copyNextSampleBuffer];
+            CMSampleBufferRef sb = nullptr;
+
+            if (stash != nullptr)
+            {
+                sb = stash;
+                stash = nullptr;
+            }
+            else
+                sb = [output copyNextSampleBuffer];
 
             if (sb == nullptr)
             {
@@ -99,6 +116,26 @@ public:
                 sb = [output copyNextSampleBuffer];
                 if (sb == nullptr)
                     return {};
+            }
+
+            // At the very start the reader first hands out an empty black buffer carrying the same time stamp as frame 0.
+            // When two buffers share a time stamp, the first is that placeholder.
+            if (index == 0 && startedAtZero)
+            {
+                startedAtZero = false;
+                CMSampleBufferRef second = [output copyNextSampleBuffer];
+                if (second != nullptr)
+                {
+                    const auto a = CMTimeGetSeconds (CMSampleBufferGetPresentationTimeStamp (sb));
+                    const auto b = CMTimeGetSeconds (CMSampleBufferGetPresentationTimeStamp (second));
+                    if (std::abs (a - b) < 1.0e-4)
+                    {
+                        CFRelease (sb);
+                        sb = second;
+                    }
+                    else
+                        stash = second;
+                }
             }
 
             auto img = toImage (sb);
@@ -113,6 +150,12 @@ private:
     bool startReader (int index)
     {
         NSError* error = nil;
+        if (stash != nullptr)
+        {
+            CFRelease (stash);
+            stash = nullptr;
+        }
+        startedAtZero = (index == 0);
         reader = [[AVAssetReader alloc] initWithAsset: asset error: &error];
         if (reader == nil)
             return false;
@@ -157,6 +200,8 @@ private:
     AVAssetReader* reader = nil;
     AVAssetReaderTrackOutput* output = nil;
     std::vector<double> stamps;
+    CMSampleBufferRef stash = nullptr;
+    bool startedAtZero = false;
     int outW = 0, outH = 0, lastIndex = -10;
 };
 } // namespace
