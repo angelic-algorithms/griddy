@@ -40,9 +40,6 @@ jobs:
       - name: Engine unit tests
         run: ./build/GriddyTests_artefacts/Release/GriddyTests
 
-      - name: Fake DAW smoke test (loads the VST3)
-        run: ./build/GriddyHostSmokeTest_artefacts/Release/GriddyHostSmokeTest build/Griddy_artefacts/Release/VST3/Griddy.vst3
-
       - name: Apple AU validation
         run: |
           mkdir -p ~/Library/Audio/Plug-Ins/Components
@@ -50,7 +47,18 @@ jobs:
           killall -9 AudioComponentRegistrar || true
           auval -v aufx Grdy Pkag
 
+      - name: Fake DAW smoke test (loads the VST3)
+        if: ${{ !cancelled() }}
+        run: ./build/GriddyHostSmokeTest_artefacts/Release/GriddyHostSmokeTest build/Griddy_artefacts/Release/VST3/Griddy.vst3
+
+      - name: Crash report, if the smoke test crashed
+        if: failure()
+        run: |
+          f=$(ls -t ~/Library/Logs/DiagnosticReports/GriddyHostSmokeTest* 2>/dev/null | head -1)
+          if [ -n "$f" ]; then head -c 20000 "$f"; else echo "No crash report found"; fi
+
       - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
         with:
           name: Griddy-macOS-unsigned
           path: |
