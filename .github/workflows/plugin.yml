@@ -51,11 +51,12 @@ jobs:
         if: ${{ !cancelled() }}
         run: ./build/GriddyHostSmokeTest_artefacts/Release/GriddyHostSmokeTest build/Griddy_artefacts/Release/VST3/Griddy.vst3
 
-      - name: Crash report, if the smoke test crashed
+      - name: Backtrace, if the smoke test crashed
         if: failure()
         run: |
-          f=$(ls -t ~/Library/Logs/DiagnosticReports/GriddyHostSmokeTest* 2>/dev/null | head -1)
-          if [ -n "$f" ]; then head -c 20000 "$f"; else echo "No crash report found"; fi
+          lldb --batch -o run -k "bt all" -k quit -- \
+            ./build/GriddyHostSmokeTest_artefacts/Release/GriddyHostSmokeTest build/Griddy_artefacts/Release/VST3/Griddy.vst3 \
+            2>&1 | tail -n 300
 
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
