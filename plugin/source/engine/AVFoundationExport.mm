@@ -197,7 +197,13 @@ bool exportTakeMovApple (const TakeMeta& meta, const juce::File& takeFolder, con
         }
 
         movFile.deleteFile();
-        return tmp.moveFileTo (movFile);
+        if (! tmp.moveFileTo (movFile))
+        {
+            error = "could not move " + tmp.getFullPathName() + " to " + movFile.getFullPathName() + " (tmp exists: " + juce::String (tmp.existsAsFile() ? "yes" : "no") + ")";
+            return false;
+        }
+
+        return true;
     }
 }
 

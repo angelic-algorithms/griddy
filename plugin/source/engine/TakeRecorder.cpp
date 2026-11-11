@@ -195,7 +195,10 @@ public:
 bool TakeRecorder::waitForMovExport()
 {
     if (movExport == nullptr)
+    {
+        movError = juce::String ("export thread was not started (exportMov ") + (config.exportMov ? "on" : "off") + ", exporter " + (movExportAvailable() ? "available" : "missing") + ")";
         return false;
+    }
 
     movExport->waitForThreadToExit (120000);
     movError = static_cast<MovExportThread&> (*movExport).message;
