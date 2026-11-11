@@ -669,6 +669,10 @@ void recordSecondTake()
     check (first.badFraction == 0.0, "the region plays take 2's video (take 1's video never appears there)");
     check (first.p99 < 45.0, "in sync");
 
+    if (getenv ("GRIDDY_DEBUG"))
+        for (const auto& x : s)
+            if (x.t > 6.5 && x.t < 10.0 && ((int) (x.t * 30) % 6) == 0)
+                say ("   dbg t " + juce::String (x.t, 2) + " host " + juce::String (x.host, 2) + " label " + juce::String (x.label) + " (want " + juce::String (t1.label()) + ") status " + juce::String ((int) x.status) + " kind " + juce::String ((int) x.kind) + " truth " + juce::String ((int) x.truth));
     const auto second = errStats (s, 7.9, 12.5);
     report ("old take still elsewhere on the timeline", second);
     check (second.badFraction < 0.1, "the old clip still plays take 1's video once its audio is recognised (wrong or late: " + juce::String (second.badFraction * 100, 1) + " percent)");

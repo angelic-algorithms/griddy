@@ -41,6 +41,9 @@ public:
     double inputPerSample8k() const noexcept { return ratio; }
     int64_t frameCount() const noexcept { return framesDone; }
 
+    /** The stream jumped (a seek or loop wrap): landmark pairs must not span the join. */
+    void breakContinuity() { recentPeaks.clear(); }
+
 private:
     struct Peak { int32_t frame; int16_t bin; };
 
@@ -98,6 +101,9 @@ public:
     /** Drops votes older than the window. Call with the current live frame. */
     void expire (int32_t liveFrame);
 
+    /** Forgets all votes (after a discontinuity in the audio). */
+    void clearVotes() { votes.clear(); counts.clear(); }
+
     /** Best current match, or takeIndex -1. */
     Match best (int32_t liveFrame) const;
 
@@ -142,6 +148,9 @@ private:
     SpscRing<float> audio;
     SpscRing<Stamp> stamps;
     int64_t streamWritten = 0;
+    int64_t expectedHostSample = -1;
+    SpscRing<int64_t> breaks;
+    std::deque<int64_t> pendingBreaks;
     Analyzer analyzer;
     Matcher matcher;
     std::deque<Stamp> recent;

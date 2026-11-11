@@ -281,7 +281,7 @@ Match Matcher::best (int32_t) const
         }
     }
 
-    if (bestTake < 0 || bestScore < 6 || bestScore < 2 * secondScore)
+    if (bestTake < 0 || bestScore < 6 || bestScore * 4 < secondScore * 5)
         return m;
 
     m.takeIndex = bestTake;
@@ -296,6 +296,7 @@ FingerprintClipSource::FingerprintClipSource (double sampleRate)
     : sr (sampleRate),
       audio ((size_t) (sampleRate * 4.0)),
       stamps (4096),
+      breaks (256),
       analyzer (sampleRate)
 {
     scratch.resize (4096);
@@ -313,6 +314,13 @@ void FingerprintClipSource::feed (const float* mono, int numSamples, int64_t hos
     if (! playing || numSamples <= 0)
         return;
 
+    if (expectedHostSample >= 0 && std::abs (hostSample - expectedHostSample) > 32)
+    {
+        const auto at = streamWritten;
+        breaks.write (&at, 1);
+    }
+
+    expectedHostSample = hostSample + numSamples;
     const auto stored = audio.write (mono, (size_t) numSamples);
     Stamp s { streamWritten, hostSample, (int32_t) stored, 0 };
     stamps.write (&s, 1);
@@ -331,9 +339,28 @@ void FingerprintClipSource::process()
     while (stamps.read (&st, 1) == 1)
         recent.push_back (st);
 
+    int64_t brk;
+    while (breaks.read (&brk, 1) == 1)
+        pendingBreaks.push_back (brk);
+
     for (;;)
     {
-        const auto got = audio.read (scratch.data(), scratch.size());
+        auto want = scratch.size();
+        if (! pendingBreaks.empty())
+        {
+            if (pendingBreaks.front() <= streamConsumed)
+            {
+                pendingBreaks.pop_front();
+                matcher.clearVotes();
+                analyzer.breakContinuity();
+                activeSamples = 0;
+                continue;
+            }
+
+            want = std::min<size_t> (want, (size_t) (pendingBreaks.front() - streamConsumed));
+        }
+
+        const auto got = audio.read (scratch.data(), want);
         if (got == 0)
             break;
 
