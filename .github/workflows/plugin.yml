@@ -61,7 +61,19 @@ jobs:
           killall -9 AudioComponentRegistrar || true
           auval -v aufx Grdy Pkag
 
+      - name: Fake DAW smoke test (loads the VST3)
+        if: ${{ !cancelled() }}
+        run: ./build/GriddyHostSmokeTest_artefacts/Release/GriddyHostSmokeTest build/Griddy_artefacts/Release/VST3/Griddy.vst3
+
+      - name: Backtrace, if the smoke test crashed
+        if: failure()
+        run: |
+          lldb --batch -o run -k "bt all" -k quit -- \
+            ./build/GriddyHostSmokeTest_artefacts/Release/GriddyHostSmokeTest build/Griddy_artefacts/Release/VST3/Griddy.vst3 \
+            2>&1 | tail -n 300
+
       - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
         with:
           name: Griddy-macOS-unsigned
           path: |

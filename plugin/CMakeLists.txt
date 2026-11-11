@@ -147,6 +147,21 @@ target_link_libraries(Griddy
         juce::juce_recommended_lto_flags
         juce::juce_recommended_warning_flags)
 
+# Hide every symbol except the plugin entry points (JUCE and CLAP mark those
+# explicitly). Without this, macOS merges our copies of JUCE's template and
+# inline code with any other JUCE copy in the same process, like another JUCE
+# plugin in the DAW or the smoke test host, and the two disagree: that showed
+# up as a crash opening the editor in the Mac smoke test.
+foreach(target Griddy Griddy_VST3 Griddy_AU Griddy_Standalone)
+    if(TARGET ${target})
+        set_target_properties(${target} PROPERTIES
+            C_VISIBILITY_PRESET hidden
+            CXX_VISIBILITY_PRESET hidden
+            OBJCXX_VISIBILITY_PRESET hidden
+            VISIBILITY_INLINES_HIDDEN TRUE)
+    endif()
+endforeach()
+
 # ----------------------------------------------------------------------------
 # Tests: the engine pieces that don't need a camera or a DAW.
 # ----------------------------------------------------------------------------
