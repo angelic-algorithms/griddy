@@ -4,7 +4,7 @@ Griddy is a multi camera video collage recorder that lives inside your DAW. Put 
 
 This folder is the native plugin version (the Max for Live device stays at the top of the repo): one C++ codebase (JUCE 9) that builds **VST3, AU, CLAP and a Standalone app**, with the whole interface written in **React and TypeScript** and shown in a WebView.
 
-Status: first cut. It builds and passes its tests on Linux with test pattern "cameras". The macOS camera and recorder code is written but has not been compiled yet; the GitHub Actions workflow (`.github/workflows/plugin.yml`) compiles and validates it on a Mac runner on every push.
+Status: first cut. It builds and passes its tests on macOS and Linux in GitHub Actions: the engine tests, Apple's AU validator, and a fake DAW that loads the VST3, records a real H.264 take tagged with its start bar, and opens the WebView window. Not tried yet with real cameras or inside a real DAW.
 
 ## How it works
 
@@ -141,11 +141,11 @@ On Linux in this repo's first pass:
 * `GriddyHostSmokeTest`: a fake DAW loads the built VST3, checks the 5 parameters, plays and records at 100 BPM from bar 3, confirms a take of about 60 frames tagged bar 3 at 100 BPM, opens and closes the WebView editor, and restores state into a new instance.
 * The Standalone app renders the React UI with live test pattern previews.
 
-Not yet compiled or run anywhere: `AVFoundationCapture.mm`, `AVFoundationRecorder.mm`, `HostPermissions_mac.mm`, the AU and the CLAP inside a real DAW. The macOS job in `.github/workflows/plugin.yml` compiles all of it, runs both test programs and runs `auval`.
+Compiled and run on a Mac in CI: the camera, recorder and permission code, the AU (passes `auval`) and the VST3 (the smoke test above). Not run yet: real cameras, Continuity Camera, and the plugin inside Live or Logic.
 
 ## Next steps
 
-1. **Mac bring up:** build, run the tests, try real cameras in the Standalone, then in Live. Fix whatever the first Mac compile finds in the three `.mm` files.
+1. **Mac bring up:** try real cameras in the Standalone, then Griddy inside Live.
 2. **Griddy Capture helper (only for DAWs that block cameras; Live doesn't):** a tiny menu bar app that owns the cameras and publishes frames through shared GPU memory (IOSurface, the same trick Syphon uses). The plugin swaps its `CaptureSource` for an IOSurface reader; everything else stays the same.
 3. **Playback in sync:** load a take and play it back locked to the DAW's PPQ, which is what the browser version does today.
 4. **GPU compositing:** Core Image or Metal, for 1080p output and 9 cameras.
