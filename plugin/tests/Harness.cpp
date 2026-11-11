@@ -1316,6 +1316,32 @@ void movExport()
         check (badRandom == 0, "random access decodes the right frames");
     }
 
+    // The platform decoder (AVFoundation on a Mac) reads the same file, if this build has one.
+    if (auto platform = createPlatformDecoder())
+    {
+        say ("  platform decoder: " + juce::String (platform->name()));
+        for (bool proxy : { false, true })
+        {
+            auto dec = createPlatformDecoder();
+            check (dec->open (A.entry.meta, A.entry.folder, proxy), juce::String ("platform decoder opens take.mov") + (proxy ? " (proxy size)" : " (full size)"));
+            const auto n = dec->numFrames();
+            check (n == A.entry.meta.numFrames, "platform decoder frame count (" + juce::String (n) + " of " + juce::String (A.entry.meta.numFrames) + ")");
+            int wrong = 0, label, counter;
+            const auto t0 = juce::Time::getMillisecondCounterHiRes();
+            for (int i = 0; i < n; ++i)
+                wrong += (! decodeCoded (dec->decode (i), label, counter) || label != A.label() || counter != i) ? 1 : 0;
+            metric (juce::String ("platform decode ") + (proxy ? "proxy" : "full") + " size, sequential", (juce::Time::getMillisecondCounterHiRes() - t0) / std::max (1, n), "ms per frame");
+            check (wrong == 0, "platform decoder: every frame is the right picture (" + juce::String (wrong) + " wrong)");
+
+            int badRandom = 0;
+            const auto t1 = juce::Time::getMillisecondCounterHiRes();
+            for (int i : { n - 1, 3, n / 2, 0, n - 2, 7 })
+                badRandom += (! decodeCoded (dec->decode (i), label, counter) || counter != i) ? 1 : 0;
+            metric (juce::String ("platform decode ") + (proxy ? "proxy" : "full") + " size, random access", (juce::Time::getMillisecondCounterHiRes() - t1) / 6.0, "ms per frame");
+            check (badRandom == 0, "platform decoder: random access is right");
+        }
+    }
+
     // The audio inside the file still carries the sync signal: play it as a moved clip and lock to it.
     std::vector<float> movSamples;
     if (movAudio (mov, movSamples))

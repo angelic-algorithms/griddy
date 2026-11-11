@@ -39,6 +39,14 @@ endif()
 # The engine core: take recording, history, decoding, sync, playback. No plugin or UI code,
 # so the tests and the headless harness build exactly the same sources the plugin does.
 # ----------------------------------------------------------------------------
+# macOS: AVFoundation decodes take.mov (VideoToolbox underneath). The core is shared by the plugin, tests and harness.
+add_library(GriddyApple INTERFACE)
+if(APPLE)
+    set(GRIDDY_APPLE_SOURCES source/engine/AVFoundationDecoder.mm)
+    set_source_files_properties(${GRIDDY_APPLE_SOURCES} PROPERTIES COMPILE_FLAGS "-fobjc-arc")
+    target_link_libraries(GriddyApple INTERFACE "-framework AVFoundation" "-framework CoreMedia" "-framework CoreVideo")
+endif()
+
 # FFmpeg (LGPL, linked dynamically) reads and writes take.mov. Optional: without it takes still record and play from their JPEG frames.
 option(GRIDDY_WITH_FFMPEG "Use FFmpeg for take.mov export and decode" ON)
 add_library(GriddyFfmpeg INTERFACE)
@@ -71,7 +79,8 @@ set(GRIDDY_CORE_SOURCES
     source/engine/SlotPlayer.cpp
     source/engine/PlaybackEngine.cpp
     source/engine/sync/EmbeddedSync.cpp
-    source/engine/sync/Fingerprint.cpp)
+    source/engine/sync/Fingerprint.cpp
+    ${GRIDDY_APPLE_SOURCES})
 
 # ----------------------------------------------------------------------------
 # The plugin
@@ -161,6 +170,7 @@ target_link_libraries(Griddy
         juce::juce_audio_utils
         juce::juce_opengl
         GriddyFfmpeg
+        GriddyApple
         juce::juce_gui_extra
         juce::juce_video
     PUBLIC
@@ -197,7 +207,7 @@ if(GRIDDY_BUILD_TESTS)
     target_include_directories(GriddyTests PRIVATE source tests)
     target_compile_definitions(GriddyTests PRIVATE JUCE_USE_CURL=0 JUCE_WEB_BROWSER=0)
     target_link_libraries(GriddyTests
-        PRIVATE juce::juce_core juce::juce_graphics juce::juce_events juce::juce_gui_basics juce::juce_opengl GriddyFfmpeg
+        PRIVATE juce::juce_core juce::juce_graphics juce::juce_events juce::juce_gui_basics juce::juce_opengl GriddyFfmpeg GriddyApple
         PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
 
     # The headless engine harness: fake DAW, fake webcam, real takes. Run by hand and in CI.
@@ -208,7 +218,7 @@ if(GRIDDY_BUILD_TESTS)
     target_include_directories(GriddyHarness PRIVATE source tests)
     target_compile_definitions(GriddyHarness PRIVATE JUCE_USE_CURL=0 JUCE_WEB_BROWSER=0)
     target_link_libraries(GriddyHarness
-        PRIVATE juce::juce_core juce::juce_graphics juce::juce_events juce::juce_gui_basics juce::juce_opengl GriddyFfmpeg
+        PRIVATE juce::juce_core juce::juce_graphics juce::juce_events juce::juce_gui_basics juce::juce_opengl GriddyFfmpeg GriddyApple
         PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
 
     # A fake DAW that loads the built VST3 and exercises it end to end.
