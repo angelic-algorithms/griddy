@@ -117,6 +117,9 @@ int main (int argc, char** argv)
 
     std::cout << "Loaded: " << types[0]->name << " by " << types[0]->manufacturerName << std::endl;
 
+    // Takes from earlier runs would be counted as this run's.
+    File::getSpecialLocation (File::userMoviesDirectory).getChildFile ("Griddy").getChildFile ("Sessions").deleteRecursively();
+
     MemoryBlock savedState;
 
     {
@@ -144,8 +147,6 @@ int main (int argc, char** argv)
         runAudio (*plugin, head, 2.0);
         head.playing = head.recording = false;
         runAudio (*plugin, head, 0.5);
-
-        File::getSpecialLocation (File::userMoviesDirectory).getChildFile ("Griddy").getChildFile ("Sessions").deleteRecursively();
 
         // Record a take: arm, play with the DAW recording for a few seconds, then stop.
         for (auto* param : plugin->getParameters())
