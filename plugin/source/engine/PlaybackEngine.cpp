@@ -27,10 +27,15 @@ struct LoopThread final : juce::Thread
 
 PlaybackEngine::PlaybackEngine (Config c) : config (std::move (c)), takeHistory (config.takesRoot)
 {
+    const auto size = canvasSize (config.canvas);
+
+    // Tile sized proxies are the cheap path for a grid; only a big single tile wants the full frames.
+    const auto shape = gridShapeFor (config.numSlots);
+    config.player.useProxy = size.x / shape.x <= 800;
+
     for (int i = 0; i < config.numSlots; ++i)
         slots.push_back (std::make_unique<Slot> (config.sampleRate, config.player));
 
-    const auto size = canvasSize (config.canvas);
     output = juce::Image (juce::Image::ARGB, size.x, size.y, true, juce::SoftwareImageType());
 }
 

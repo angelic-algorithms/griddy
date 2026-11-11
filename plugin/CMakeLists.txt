@@ -158,9 +158,20 @@ if(GRIDDY_BUILD_TESTS)
         tests/EngineSyncTests.cpp
         ${GRIDDY_CORE_SOURCES}
         source/capture/TestPatternSource.cpp)
-    target_include_directories(GriddyTests PRIVATE source)
+    target_include_directories(GriddyTests PRIVATE source tests)
     target_compile_definitions(GriddyTests PRIVATE JUCE_USE_CURL=0 JUCE_WEB_BROWSER=0)
     target_link_libraries(GriddyTests
+        PRIVATE juce::juce_core juce::juce_graphics juce::juce_events juce::juce_gui_basics
+        PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
+
+    # The headless engine harness: fake DAW, fake webcam, real takes. Run by hand and in CI.
+    juce_add_console_app(GriddyHarness PRODUCT_NAME "GriddyHarness")
+    target_sources(GriddyHarness PRIVATE
+        tests/Harness.cpp
+        ${GRIDDY_CORE_SOURCES})
+    target_include_directories(GriddyHarness PRIVATE source tests)
+    target_compile_definitions(GriddyHarness PRIVATE JUCE_USE_CURL=0 JUCE_WEB_BROWSER=0)
+    target_link_libraries(GriddyHarness
         PRIVATE juce::juce_core juce::juce_graphics juce::juce_events juce::juce_gui_basics
         PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
 
