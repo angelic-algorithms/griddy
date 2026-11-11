@@ -2,7 +2,7 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 
-#include "engine/EngineHost.h"
+#include "engine/Hub.h"
 #include "engine/VideoEngine.h"
 
 namespace griddy
@@ -10,6 +10,7 @@ namespace griddy
 
 namespace ParamIDs
 {
+    inline constexpr auto slot       = "slot";
     inline constexpr auto numSlots   = "numSlots";
     inline constexpr auto recordArm  = "recordArm";
     inline constexpr auto recordMode = "recordMode";
@@ -53,17 +54,20 @@ public:
     void setStateInformation (const void* data, int sizeInBytes) override;
 
     juce::AudioProcessorValueTreeState& getParameters() noexcept { return parameters; }
-    VideoEngine& getEngine() noexcept { return *engine; }
-    EngineHost& getHost() noexcept { return *host; }
+    VideoEngine& getEngine() noexcept { return hub->video(); }
+    Hub& getHub() noexcept { return *hub; }
+    Member* getMember() noexcept { return member; }
     TransportSnapshot getTransport() const noexcept { return transport.read(); }
 
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
 private:
+    // Declared first, so it is destroyed last: the hub outlives every instance that uses it.
+    juce::SharedResourcePointer<Hub> hub;
+    Member* member = nullptr;
+
     juce::AudioProcessorValueTreeState parameters;
     TransportState transport;
-    std::unique_ptr<VideoEngine> engine;
-    std::unique_ptr<EngineHost> host;
     int64_t blockCounter = 0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (GriddyProcessor)

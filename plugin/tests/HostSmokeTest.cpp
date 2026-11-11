@@ -61,36 +61,49 @@ std::unique_ptr<AudioPluginInstance> load (AudioPluginFormatManager& fm, const P
     return instance;
 }
 
-/** Runs the audio callback for `seconds` of audio at 48 kHz, advancing the fake transport. */
-void runAudio (AudioPluginInstance& p, FakePlayHead& head, double seconds, bool noise = false)
+/** Runs the audio callback of every plugin for `seconds` of audio at 48 kHz, advancing the fake transport.
+    Several instances share one transport, like several tracks in one DAW. */
+void runAudio (std::vector<AudioPluginInstance*> plugins, FakePlayHead& head, double seconds, bool noise = false)
 {
-    Random rng (7);
+    std::vector<Random> rngs;
+    for (size_t i = 0; i < plugins.size(); ++i)
+        rngs.emplace_back (7 + (int64) i * 2);
+
     AudioBuffer<float> buffer (2, 512);
     MidiBuffer midi;
     const auto blocks = (int) (seconds * 48000.0 / 512.0);
 
     for (int i = 0; i < blocks; ++i)
     {
-        buffer.clear();
-        if (noise)
-            for (int ch = 0; ch < 2; ++ch)
-                for (int n = 0; n < 512; ++n)
-                    buffer.setSample (ch, n, 0.3f * (rng.nextFloat() * 2.0f - 1.0f));
-        else
-            buffer.setSample (0, 0, 0.5f);
+        for (size_t k = 0; k < plugins.size(); ++k)
+        {
+            buffer.clear();
+            if (noise)
+                for (int ch = 0; ch < 2; ++ch)
+                    for (int n = 0; n < 512; ++n)
+                        buffer.setSample (ch, n, 0.3f * (rngs[k].nextFloat() * 2.0f - 1.0f));
+            else
+                buffer.setSample (0, 0, 0.5f);
 
-        p.processBlock (buffer, midi);
+            plugins[k]->processBlock (buffer, midi);
+
+            // Audio should pass through untouched.
+            if (! noise && i == blocks - 1)
+                check (std::abs (buffer.getSample (0, 0) - 0.5f) < 1.0e-6f, "audio passes through");
+        }
+
         head.ppq += 512.0 / 48000.0 * (100.0 / 60.0);
         head.samples += 512;
 
-        // Real time pacing, so the 30 fps video engine sees the transport move.
+        // Real time pacing, so the video engine sees the transport move.
         if (i % 4 == 0)
             pumpMessages (40);
     }
+}
 
-    // Audio should pass through untouched.
-    if (! noise)
-        check (std::abs (buffer.getSample (0, 0) - 0.5f) < 1.0e-6f, "audio passes through");
+void runAudio (AudioPluginInstance& p, FakePlayHead& head, double seconds, bool noise = false)
+{
+    runAudio (std::vector<AudioPluginInstance*> { &p }, head, seconds, noise);
 }
 } // namespace
 
@@ -148,38 +161,66 @@ int main (int argc, char** argv)
         head.playing = head.recording = false;
         runAudio (*plugin, head, 0.5);
 
-        // Record a take: arm, play with the DAW recording for a few seconds, then stop.
-        for (auto* param : plugin->getParameters())
-            if (param->getName (64) == "Record arm")
-                param->setValueNotifyingHost (1.0f);
+        // Two instances in one "DAW", like two tracks. Each should take its own slot and record its own take.
+        auto second = load (fm, *types[0]);
+        if (second == nullptr)
+            return 1;
+
+        second->setPlayHead (&head);
+        second->prepareToPlay (48000.0, 512);
+
+        for (auto* instance : { plugin.get(), second.get() })
+            for (auto* param : instance->getParameters())
+                if (param->getName (64) == "Record arm")
+                    param->setValueNotifyingHost (1.0f);
+
+        // Both ask for slot 1; the hub must give the second one slot 2 and show it in the parameter.
+        pumpMessages (300);
+        auto slotOf = [] (AudioPluginInstance& p) -> String
+        {
+            for (auto* param : p.getParameters())
+                if (param->getName (64) == "Slot")
+                    return param->getCurrentValueAsText();
+            return {};
+        };
+        check (slotOf (*plugin) == "1" && slotOf (*second) == "2", "the two instances own different slots (" + slotOf (*plugin) + " and " + slotOf (*second) + ")");
 
         head.playing = head.recording = true;
-        runAudio (*plugin, head, 4.0, true);
+        runAudio ({ plugin.get(), second.get() }, head, 4.0, true);
         head.playing = head.recording = false;
-        runAudio (*plugin, head, 0.5);
-        pumpMessages (5000); // the take is finished and analysed on worker threads
+        runAudio ({ plugin.get(), second.get() }, head, 0.5);
+        pumpMessages (6000); // the takes are finished and analysed on worker threads
 
         {
             // The default output folder; the VST3 wrapper hides the plugin's own state, so look on disk.
             const auto sessions = File::getSpecialLocation (File::userMoviesDirectory).getChildFile ("Griddy").getChildFile ("Sessions");
             check (sessions.isDirectory(), "the plugin made a sessions folder");
-            const auto slotFolder = sessions;
-            Array<File> takes;
-            slotFolder.findChildFiles (takes, File::findDirectories, true, "*.gtake");
-            check (takes.size() == 1, "one take was recorded (" + String (takes.size()) + " found)");
 
-            if (takes.size() == 1)
+            Array<File> sessionFolders;
+            sessions.findChildFiles (sessionFolders, File::findDirectories, false);
+            check (sessionFolders.size() == 1, "both instances share one session (" + String (sessionFolders.size()) + " folders)");
+
+            Array<File> takes;
+            sessions.findChildFiles (takes, File::findDirectories, true, "*.gtake");
+            check (takes.size() == 2, "each instance recorded one take (" + String (takes.size()) + " found)");
+
+            StringArray slotFolders;
+            for (auto& t : takes)
             {
-                const auto meta = JSON::parse (takes[0].getChildFile ("take.json"));
+                slotFolders.add (t.getParentDirectory().getFileName());
+                const auto meta = JSON::parse (t.getChildFile ("take.json"));
                 const auto state = meta.getProperty ("state", {}).toString();
                 const auto frames = meta.getProperty ("frameTimes", {}).getArray() != nullptr ? meta.getProperty ("frameTimes", {}).getArray()->size() : 0;
                 const auto seconds = (double) meta.getProperty ("durationSeconds", 0.0);
-                std::cout << "  take: state " << state << ", " << frames << " frames, " << seconds << " s" << std::endl;
+                std::cout << "  take in " << t.getParentDirectory().getFileName() << ": state " << state << ", " << frames << " frames, " << seconds << " s" << std::endl;
                 check (state == "review", "the take is waiting for review");
                 check (seconds > 3.5 && seconds < 4.6, "the reference audio is about as long as the recording");
                 check (frames > 40 && frames < 150, "camera frames were recorded (" + String (frames) + " in about 4 s; a loaded CI machine can fall well short of 30 fps)");
-                check (takes[0].getChildFile ("audio.wav").existsAsFile(), "the take has its reference audio");
+                check (t.getChildFile ("audio.wav").existsAsFile(), "the take has its reference audio");
             }
+
+            slotFolders.sort (false);
+            check (slotFolders.joinIntoString (",") == "slot1,slot2", "the takes landed in slots 1 and 2 (" + slotFolders.joinIntoString (",") + ")");
         }
 
         // Editor: create the WebView UI, let it load, then tear it down.

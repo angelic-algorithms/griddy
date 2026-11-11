@@ -9,6 +9,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout GriddyProcessor::createParam
     using namespace juce;
     AudioProcessorValueTreeState::ParameterLayout layout;
 
+    layout.add (std::make_unique<AudioParameterInt> (ParameterID { ParamIDs::slot, 1 }, "Slot", 1, Hub::maxSlots, 1));
+
     layout.add (std::make_unique<AudioParameterInt> (ParameterID { ParamIDs::numSlots, 1 }, "Cameras",
                                                      1, VideoEngine::maxSlots, 4));
 
@@ -25,32 +27,30 @@ GriddyProcessor::GriddyProcessor()
                           .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
       parameters (*this, nullptr, "GriddyState", createParameterLayout())
 {
-    EngineControls controls;
-    controls.numSlots   = parameters.getRawParameterValue (ParamIDs::numSlots);
+    MemberControls controls;
+    controls.slot       = parameters.getRawParameterValue (ParamIDs::slot);
+    controls.cameras    = parameters.getRawParameterValue (ParamIDs::numSlots);
     controls.recordArm  = parameters.getRawParameterValue (ParamIDs::recordArm);
     controls.recordMode = parameters.getRawParameterValue (ParamIDs::recordMode);
 
-    engine = std::make_unique<VideoEngine> (transport, controls);
+    // The hub may need to move this instance to a free slot; the parameter is shown on the message thread.
+    controls.setSlotParameter = [this] (int slot)
+    {
+        if (auto* p = parameters.getParameter (ParamIDs::slot))
+            p->setValueNotifyingHost (p->convertTo0to1 ((float) (slot + 1)));
+    };
 
-    // A fresh instance starts with test patterns so there's something on screen
-    // before any camera is picked (and in hosts that block cameras).
-    for (int slot = 0; slot < 4; ++slot)
-        engine->setSlotSource (slot, "test:" + juce::String (slot + 1));
-
-    engine->startEngine();
-
-    host = std::make_unique<EngineHost> (*engine, controls);
+    member = hub->addMember (controls);
 }
 
 GriddyProcessor::~GriddyProcessor()
 {
-    host.reset();
-    engine->stopEngine();
+    hub->removeMember (member);
 }
 
 void GriddyProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
-    host->prepare (sampleRate, samplesPerBlock);
+    hub->prepare (sampleRate, samplesPerBlock);
 }
 void GriddyProcessor::releaseResources() {}
 
@@ -99,7 +99,7 @@ void GriddyProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
     transport.write (s);
 
     // Hand the same block to the recorder and the playback engine.
-    host->processBlock (buffer, s);
+    hub->processBlock (*member, buffer, s);
 }
 
 juce::AudioProcessorEditor* GriddyProcessor::createEditor()
@@ -115,17 +115,11 @@ void GriddyProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
     auto state = parameters.copyState();
 
-    juce::ValueTree slots ("Slots");
-    const auto ids = engine->getSlotSources();
-
-    for (int i = 0; i < VideoEngine::maxSlots; ++i)
-        slots.appendChild (juce::ValueTree ("Slot", { { "index", i }, { "source", ids[(size_t) i] } }), nullptr);
-
-    state.removeChild (state.getChildWithName ("Slots"), nullptr);
-    state.appendChild (slots, nullptr);
-    state.setProperty ("outputFolder", engine->getOutputFolder().getFullPathName(), nullptr);
-    state.setProperty ("session", host->getSession(), nullptr);
-    state.setProperty ("targetSlot", host->getTargetSlot(), nullptr);
+    const auto slot = member->slot.load();
+    const auto sources = hub->video().getSlotSources();
+    state.setProperty ("source", slot >= 0 ? sources[(size_t) slot] : juce::String(), nullptr);
+    state.setProperty ("outputFolder", hub->video().getOutputFolder().getFullPathName(), nullptr);
+    state.setProperty ("session", hub->getSession(), nullptr);
 
     if (auto xml = state.createXml())
         copyXmlToBinary (*xml, destData);
@@ -139,25 +133,19 @@ void GriddyProcessor::setStateInformation (const void* data, int sizeInBytes)
         return;
 
     auto state = juce::ValueTree::fromXml (*xml);
-    const auto slots = state.getChildWithName ("Slots");
-
-    for (const auto& slot : slots)
-    {
-        const auto index = (int) slot.getProperty ("index", -1);
-        const auto source = slot.getProperty ("source").toString();
-
-        // If a camera from last session is unplugged, the slot just shows "no camera".
-        if (juce::isPositiveAndBelow (index, VideoEngine::maxSlots))
-            engine->setSlotSource (index, source);
-    }
+    parameters.replaceState (state);
 
     if (const auto folder = state.getProperty ("outputFolder").toString(); juce::File::isAbsolutePath (folder))
-        engine->setOutputFolder (juce::File (folder));
+        hub->video().setOutputFolder (juce::File (folder));
 
-    host->setTargetSlot ((int) state.getProperty ("targetSlot", 0));
-    host->setSession (state.getProperty ("session").toString());
+    // All instances of one project carry the same session id. The first one to load decides it.
+    hub->setSession (state.getProperty ("session").toString());
 
-    parameters.replaceState (state);
+    // If a camera from last session is unplugged, the slot just shows "no camera".
+    const auto source = state.getProperty ("source").toString();
+    const auto slot = (int) std::lround (parameters.getRawParameterValue (ParamIDs::slot)->load()) - 1;
+    if (source.isNotEmpty() && juce::isPositiveAndBelow (slot, Hub::maxSlots))
+        hub->video().setSlotSource (slot, source);
 }
 
 } // namespace griddy

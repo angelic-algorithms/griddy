@@ -43,8 +43,9 @@ private:
 
     GriddyProcessor& processor;
     VideoEngine& engine;
-    EngineHost& host;
+    Hub& hub;
 
+    juce::WebSliderRelay slotRelay { ParamIDs::slot };
     juce::WebSliderRelay numSlotsRelay { ParamIDs::numSlots };
     juce::WebToggleButtonRelay recordArmRelay { ParamIDs::recordArm };
     juce::WebComboBoxRelay recordModeRelay { ParamIDs::recordMode };
@@ -52,6 +53,7 @@ private:
     // Declared after the relays because its options reference them.
     std::unique_ptr<juce::WebBrowserComponent> browser;
 
+    juce::WebSliderParameterAttachment slotAttachment;
     juce::WebSliderParameterAttachment numSlotsAttachment;
     juce::WebToggleButtonParameterAttachment recordArmAttachment;
     juce::WebComboBoxParameterAttachment recordModeAttachment;
