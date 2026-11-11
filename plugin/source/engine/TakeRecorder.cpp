@@ -268,7 +268,7 @@ std::optional<TakeHistory::Entry> TakeRecorder::stop()
 
     history.finishTake (entry);
 
-    if (config.exportMov && ffmpegAvailable())
+    if (config.exportMov && movExportAvailable())
     {
         if (movExport != nullptr)
             movExport->stopThread (60000);

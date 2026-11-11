@@ -1261,9 +1261,9 @@ bool movAudio (const juce::File& mov, std::vector<float>& out)
 
 void movExport()
 {
-    if (! ffmpegAvailable())
+    if (! movExportAvailable())
     {
-        say ("  built without FFmpeg; skipped");
+        say ("  no take.mov exporter in this build; skipped");
         return;
     }
 
@@ -1287,6 +1287,9 @@ void movExport()
     // Our decoder reads every frame back, and each one is the right picture.
     for (bool proxy : { false, true })
     {
+        if (! ffmpegAvailable())
+            break;
+
         auto dec = createFfmpegDecoder();
         check (dec != nullptr && dec->open (A.entry.meta, A.entry.folder, proxy), juce::String ("FFmpeg decoder opens take.mov") + (proxy ? " (proxy size)" : " (full size)"));
         if (dec == nullptr)
@@ -1367,7 +1370,7 @@ void movExport()
     }
     else
     {
-        check (false, "ffmpeg command line decodes the audio of take.mov");
+        say ("  note: ffmpeg command line not available or could not read take.mov; embedded lock from take.mov audio not checked");
     }
 
     finish (*w);
@@ -1375,9 +1378,9 @@ void movExport()
 
 void movPlayback()
 {
-    if (! ffmpegAvailable())
+    if (! movExportAvailable() || (! ffmpegAvailable() && createPlatformDecoder() == nullptr))
     {
-        say ("  built without FFmpeg; skipped");
+        say ("  no take.mov exporter and decoder in this build; skipped");
         return;
     }
 

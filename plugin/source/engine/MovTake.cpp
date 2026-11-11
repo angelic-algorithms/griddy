@@ -19,12 +19,21 @@ namespace griddy
 #ifndef GRIDDY_HAVE_FFMPEG
 
 bool ffmpegAvailable() { return false; }
-bool exportTakeMov (const TakeMeta&, const juce::File&, const juce::File&, juce::String& error) { error = "built without FFmpeg"; return false; }
 std::unique_ptr<VideoDecoder> createFfmpegDecoder() { return nullptr; }
+
+#if JUCE_MAC
+bool exportTakeMovApple (const TakeMeta&, const juce::File&, const juce::File&, juce::String&); // AVFoundationExport.mm
+bool movExportAvailable() { return true; }
+bool exportTakeMov (const TakeMeta& m, const juce::File& f, const juce::File& o, juce::String& e) { return exportTakeMovApple (m, f, o, e); }
+#else
+bool movExportAvailable() { return false; }
+bool exportTakeMov (const TakeMeta&, const juce::File&, const juce::File&, juce::String& error) { error = "built without FFmpeg"; return false; }
+#endif
 
 #else
 
 bool ffmpegAvailable() { return true; }
+bool movExportAvailable() { return true; }
 
 namespace
 {

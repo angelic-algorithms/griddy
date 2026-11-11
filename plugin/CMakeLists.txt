@@ -42,13 +42,18 @@ endif()
 # macOS: AVFoundation decodes take.mov (VideoToolbox underneath). The core is shared by the plugin, tests and harness.
 add_library(GriddyApple INTERFACE)
 if(APPLE)
-    set(GRIDDY_APPLE_SOURCES source/engine/AVFoundationDecoder.mm)
+    set(GRIDDY_APPLE_SOURCES source/engine/AVFoundationDecoder.mm source/engine/AVFoundationExport.mm)
     set_source_files_properties(${GRIDDY_APPLE_SOURCES} PROPERTIES COMPILE_FLAGS "-fobjc-arc")
     target_link_libraries(GriddyApple INTERFACE "-framework AVFoundation" "-framework CoreMedia" "-framework CoreVideo")
 endif()
 
 # FFmpeg (LGPL, linked dynamically) reads and writes take.mov. Optional: without it takes still record and play from their JPEG frames.
-option(GRIDDY_WITH_FFMPEG "Use FFmpeg for take.mov export and decode" ON)
+if(APPLE)
+    # macOS builds are universal and use AVFoundation (VideoToolbox) for decode and AVAssetWriter for export, so no FFmpeg is linked.
+    option(GRIDDY_WITH_FFMPEG "Use FFmpeg for take.mov export and decode" OFF)
+else()
+    option(GRIDDY_WITH_FFMPEG "Use FFmpeg for take.mov export and decode" ON)
+endif()
 add_library(GriddyFfmpeg INTERFACE)
 if(GRIDDY_WITH_FFMPEG)
     find_package(PkgConfig QUIET)

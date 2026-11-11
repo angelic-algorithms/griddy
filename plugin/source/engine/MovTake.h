@@ -9,6 +9,9 @@ namespace griddy
 /** True when this build has FFmpeg. Everything else in this header does nothing without it. */
 bool ffmpegAvailable();
 
+/** True when exportTakeMov can run: FFmpeg, or AVFoundation on a Mac (macOS builds use Apple's writer and carry no FFmpeg). */
+bool movExportAvailable();
+
 /** Writes take.mov next to the take's media: the intraframe pictures (the JPEGs are remuxed, not re-encoded, so no quality
     loss and it is fast) and the reference audio, which is the audio carrying the Griddy sync signal when the take was
     recorded with it. Put that file on a track in Live's Arrangement View and the sync decoder locks to it.
