@@ -52,7 +52,10 @@ public:
 
             while (CMSampleBufferRef sb = [out copyNextSampleBuffer])
             {
-                stamps.push_back (CMTimeGetSeconds (CMSampleBufferGetPresentationTimeStamp (sb)));
+                // The reader also hands out empty marker buffers (no samples, no data, or an invalid time). Those are not frames.
+                const auto pts = CMSampleBufferGetPresentationTimeStamp (sb);
+                if (CMSampleBufferGetNumSamples (sb) > 0 && CMSampleBufferGetTotalSampleSize (sb) > 0 && CMTIME_IS_VALID (pts))
+                    stamps.push_back (CMTimeGetSeconds (pts));
                 CFRelease (sb);
             }
 
