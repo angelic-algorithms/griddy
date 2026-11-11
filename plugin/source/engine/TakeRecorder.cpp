@@ -180,6 +180,7 @@ public:
 
     void run() override
     {
+        ran = true;
         juce::String error;
         ok = exportTakeMov (meta, folder, folder.getChildFile ("take.mov"), error);
         message = error;
@@ -187,7 +188,7 @@ public:
 
     TakeMeta meta;
     juce::File folder;
-    bool ok = false;
+    bool ok = false, ran = false;
     juce::String message;
 };
 } // namespace
@@ -202,6 +203,10 @@ bool TakeRecorder::waitForMovExport()
 
     movExport->waitForThreadToExit (120000);
     movError = static_cast<MovExportThread&> (*movExport).message;
+    if (! static_cast<MovExportThread&> (*movExport).ran)
+        movError = "export thread never ran";
+    else if (movError.isEmpty() && ! static_cast<MovExportThread&> (*movExport).ok)
+        movError = "exporter returned false without a message";
     return static_cast<MovExportThread&> (*movExport).ok;
 }
 
@@ -281,7 +286,9 @@ std::optional<TakeHistory::Entry> TakeRecorder::stop()
 
         // A copy of the final meta: the export must not read the entry while the UI edits it.
         auto t = std::make_unique<MovExportThread> (entry.meta, entry.folder);
-        t->startThread (juce::Thread::Priority::background);
+        const auto started = t->startThread (juce::Thread::Priority::normal);
+        if (! started)
+            t->run(); // no thread to be had: write it here rather than not at all
         movExport = std::move (t);
     }
 
