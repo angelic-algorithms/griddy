@@ -72,7 +72,8 @@ bool exportTakeMovApple (const TakeMeta& meta, const juce::File& takeFolder, con
         AVAssetWriter* writer = [AVAssetWriter assetWriterWithURL: url fileType: AVFileTypeQuickTimeMovie error: &nserr];
         if (writer == nil)
         {
-            error = juce::String::fromUTF8 ([[nserr localizedDescription] UTF8String]);
+            error = "AVAssetWriter could not be created: " + juce::String::fromUTF8 ([[nserr description] UTF8String] != nullptr ? [[nserr description] UTF8String] : "no NSError")
+                    + " (path " + tmp.getFullPathName() + ")";
             return false;
         }
 
@@ -110,7 +111,7 @@ bool exportTakeMovApple (const TakeMeta& meta, const juce::File& takeFolder, con
 
         if (! [writer startWriting])
         {
-            error = juce::String::fromUTF8 ([[writer.error localizedDescription] UTF8String]);
+            error = "startWriting failed: " + juce::String::fromUTF8 ([[writer.error description] UTF8String] != nullptr ? [[writer.error description] UTF8String] : "no NSError");
             return false;
         }
 
@@ -188,10 +189,9 @@ bool exportTakeMovApple (const TakeMeta& meta, const juce::File& takeFolder, con
 
         if (! ok || writer.status != AVAssetWriterStatusCompleted)
         {
-            if (error.isEmpty() && writer.error != nil)
-                error = juce::String::fromUTF8 ([[writer.error localizedDescription] UTF8String]);
-            if (error.isEmpty())
-                error = "AVAssetWriter failed";
+            if (writer.error != nil)
+                error += " " + juce::String::fromUTF8 ([[writer.error description] UTF8String]);
+            error += " (status " + juce::String ((int) writer.status) + ", video frames appended " + juce::String (vi) + ", audio samples " + juce::String ((int) aPos) + ")";
             tmp.deleteFile();
             return false;
         }
