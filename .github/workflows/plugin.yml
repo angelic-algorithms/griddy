@@ -43,6 +43,12 @@ jobs:
       - name: Fake DAW smoke test (loads the VST3)
         run: ./build/GriddyHostSmokeTest_artefacts/Release/GriddyHostSmokeTest build/Griddy_artefacts/Release/VST3/Griddy.vst3
 
+      - name: Crash report (only if the smoke test failed)
+        if: failure()
+        run: |
+          sleep 5
+          for f in ~/Library/Logs/DiagnosticReports/GriddyHostSmokeTest*; do echo "=== $f"; head -c 12000 "$f"; done || true
+
       - name: Engine harness (real time scenarios, 60 second soak)
         run: |
           ./build/GriddyHarness_artefacts/Release/GriddyHarness
