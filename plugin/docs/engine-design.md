@@ -117,3 +117,11 @@ Max for Live files, ARA2, final UI wiring for every control, Windows capture, th
 - Embedded sync locks in about 0.16 to 0.22 s, not 0.1 s.
 - The fingerprint source resets its votes when the host audio jumps (seek or loop wrap), and accepts a best match at least 1.25x the runner up, because the correlation check verifies it. Repetitive music otherwise stayed ambiguous.
 - Measured numbers: `docs/engine-benchmarks.md`. Headless harness: `plugin/tests/Harness.cpp`.
+
+### Later additions
+
+- take.mov: written after a take stops (FFmpeg on Linux, AVAssetWriter on macOS, JPEG passthrough plus PCM audio). The take folder stays the source of truth.
+- Decoders: JPEG frames (default), FFmpeg (Linux, optional), AVFoundation (macOS). The macOS reader stamps a black placeholder before the range start, which the decoder skips.
+- Compositors: CPU reference and an OpenGL path. The GPU path matches the CPU picture but is only measured on software renderers, so CPU stays the default.
+- Embedded sync runs at 800 baud (48 bit frame, about 60 ms). Fingerprint matching resets on host audio discontinuities.
+- The engine is not yet wired into the plugin processor and editor. The plugin still uses the earlier camera code.

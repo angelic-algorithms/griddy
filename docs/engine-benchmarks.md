@@ -53,9 +53,32 @@ Not met: "zero dropped frames over 10 minutes with 9 slots" and "video within 1 
 
 The 1080p CPU composite is about two thirds of a 30 fps frame budget on this machine. That is why the GPU compositor matters; it is not written. JPEG sizes in the harness are unrealistically small (flat synthetic pictures), so disk and bandwidth numbers for real camera footage are not measured. Live fingerprint analysis for 9 slots is about 93 ms of CPU per second, which is high for an audio plugin and a candidate for optimisation.
 
+## Update: compositor, decoders, GPU, exporter
+
+Linux box, 2 vCPU, no GPU. Mac numbers are from the GitHub macos-15 runner.
+
+Compositor (CPU, 9 slots, fixed point bilinear cover blit): 720p 3.6 to 4.4 ms, 1080p 8.1 to 11.5 ms, 1080x1080 6.0 ms, 1080x1920 10.5 ms.
+
+GPU compositor (OpenGL), both machines have only a software renderer, so these are NOT hardware GPU numbers:
+- Linux llvmpipe: 720p draw 3.1 to 3.8 ms plus readback 0.7 to 0.9 ms. 1080p draw 6.6 to 7.3 ms plus readback 1.7 to 2.2 ms.
+- macOS runner (software renderer): 720p total 14.5 to 17 ms. 1080p total 41 to 45 ms. Slower than the CPU path.
+- Picture matches the CPU reference (mean difference 0.01 of 255 or less, worst pixel 2.7).
+- Conclusion: keep the CPU path as the default. Turn the GPU path on only after a real Mac or PC GPU shows it is faster.
+
+Decoders (synthetic frames, so unrealistically small files):
+- JPEG: 640x360 1.0 ms, 1280x720 4.7 ms, 1920x1080 10.5 ms.
+- FFmpeg from take.mov (Linux): 0.35 to 0.41 ms per frame.
+- AVFoundation from take.mov (macOS runner): full size sequential 3.9 to 6.5 ms, proxy size sequential 1.2 to 1.4 ms. Random access (restarts the reader) 22 to 63 ms per frame, so use it for scrubbing sparingly and prefer the JPEG frames or proxy while seeking.
+
+take.mov export: Linux uses FFmpeg, macOS uses AVAssetWriter (JPEG passthrough, PCM audio). Both write after the take stops. 4 second take is about 0.9 MB. The Mac decoder reads it back with every frame correct and the embedded sync signal inside its audio locks in about 50 ms.
+
+Sync: embedded signal now 800 baud, lock about 90 ms (was 155 to 223 ms). Fingerprint index build 1.4 ms per second of audio (2.1 MB per minute), live analysis about 1 percent of a core per slot.
+
+30 minute soak (Linux, 9 slots, 1080p): 54196 frames, 0 late, 0 skipped, render mean 10.9 ms, max 47 ms, p99 drift 16 ms, max drift 53 ms, memory 227 to 231 MB (0.01 percent growth after replacing the drift vector with a histogram).
+
 ## Cannot be verified here
 
 - macOS code (`.mm`, AVFoundation camera, AU), Windows, any real DAW including Ableton Live 12.
-- VideoToolbox / Media Foundation decode, GPU compositing, `.mov` take files (takes are JPEG folders, see engine-design.md).
+- Hardware GPU speed (both CI machines use a software renderer), VideoToolbox hardware decode (AVFoundation runs, but we cannot see whether it used hardware), and a Windows decoder (not written).
 - Audibility of the 18 kHz embedded carrier, and fingerprint hit rates on dense real mixes or through Live's own processing.
 - Real camera latency measurement and the audio to video offset on real hardware.
