@@ -9,7 +9,7 @@ const initialTransport: Transport = {
 };
 
 const initialStatus: Status = {
-  outputFolder: "", lastTake: "", lastError: "", recorderFormat: "", recording: false, fps: 0,
+  outputFolder: "", lastTake: "", lastError: "", fps: 0,
   camerasAllowed: true, cameraBlockedReason: "", outputSize: "",
 };
 
@@ -51,7 +51,7 @@ export function App() {
       <header className="topbar">
         <h1>Griddy</h1>
         <TransportBar t={transport} />
-        <ArmButton recording={status.recording} />
+        <ArmButton recording={false} />
       </header>
 
       {!status.camerasAllowed && status.cameraBlockedReason && (
@@ -62,7 +62,7 @@ export function App() {
         <div className="stage">
           <Preview />
           <footer className="stage-foot muted">
-            <span>{status.outputSize} · {status.fps.toFixed(0)} fps · {status.recorderFormat}</span>
+            <span>{status.outputSize} · {status.fps.toFixed(0)} fps</span>
             {status.lastTake && <span>Last take: {fileName(status.lastTake)}</span>}
           </footer>
           {status.lastError && <p className="error">{status.lastError}</p>}

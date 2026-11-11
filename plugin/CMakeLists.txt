@@ -15,13 +15,12 @@ if(APPLE)
     enable_language(OBJCXX)
 endif()
 
-option(GRIDDY_BUILD_CLAP "Also build a CLAP plugin via clap-juce-extensions" ON)
 option(GRIDDY_BUILD_TESTS "Build the GriddyTests console app" ON)
 option(GRIDDY_UI_DEV_SERVER "Load the UI from the Vite/esbuild dev server (http://localhost:5173) for hot reload" OFF)
 
 # ----------------------------------------------------------------------------
 # Dependencies. Pinned to exact tags so builds are reproducible.
-# Set JUCE_DIR / CLAP_JUCE_EXT_DIR to a local checkout to skip the download.
+# Set JUCE_DIR to a local checkout to skip the download.
 # ----------------------------------------------------------------------------
 include(FetchContent)
 set(FETCHCONTENT_QUIET OFF)
@@ -34,23 +33,6 @@ else()
         GIT_TAG 9.0.5
         GIT_SHALLOW TRUE)
     FetchContent_MakeAvailable(juce)
-endif()
-
-if(GRIDDY_BUILD_CLAP)
-    if(DEFINED CLAP_JUCE_EXT_DIR)
-        add_subdirectory(${CLAP_JUCE_EXT_DIR} ${CMAKE_BINARY_DIR}/_deps/clapjuce-build EXCLUDE_FROM_ALL)
-    else()
-        FetchContent_Declare(clap_juce_extensions
-            GIT_REPOSITORY https://github.com/free-audio/clap-juce-extensions.git
-            GIT_TAG main
-            GIT_SHALLOW TRUE
-            GIT_SUBMODULES_RECURSE TRUE)
-        FetchContent_GetProperties(clap_juce_extensions)
-        if(NOT clap_juce_extensions_POPULATED)
-            FetchContent_Populate(clap_juce_extensions)
-            add_subdirectory(${clap_juce_extensions_SOURCE_DIR} ${clap_juce_extensions_BINARY_DIR} EXCLUDE_FROM_ALL)
-        endif()
-    endif()
 endif()
 
 # ----------------------------------------------------------------------------
@@ -89,20 +71,16 @@ target_sources(Griddy PRIVATE
     source/engine/Compositor.cpp
     source/engine/FrameStore.cpp
     source/engine/VideoEngine.cpp
-    source/engine/ImageSequenceRecorder.cpp
-    source/engine/RecorderFactory.cpp
     source/capture/TestPatternSource.cpp
     source/capture/CaptureDevices.cpp)
 
 if(APPLE)
     target_sources(Griddy PRIVATE
         source/capture/AVFoundationCapture.mm
-        source/engine/AVFoundationRecorder.mm
         source/capture/HostPermissions_mac.mm)
     # Our Objective-C++ files use ARC so we never hand manage retain/release.
     set_source_files_properties(
         source/capture/AVFoundationCapture.mm
-        source/engine/AVFoundationRecorder.mm
         source/capture/HostPermissions_mac.mm
         PROPERTIES COMPILE_FLAGS "-fobjc-arc")
     target_link_libraries(Griddy PRIVATE
@@ -153,12 +131,6 @@ target_link_libraries(Griddy
         juce::juce_recommended_lto_flags
         juce::juce_recommended_warning_flags)
 
-if(GRIDDY_BUILD_CLAP)
-    clap_juce_extensions_plugin(TARGET Griddy
-        CLAP_ID "com.parkangel.griddy"
-        CLAP_FEATURES audio-effect utility)
-endif()
-
 # ----------------------------------------------------------------------------
 # Tests: the engine pieces that don't need a camera or a DAW.
 # ----------------------------------------------------------------------------
@@ -171,7 +143,6 @@ if(GRIDDY_BUILD_TESTS)
         source/engine/CollageLayout.cpp
         source/engine/Compositor.cpp
         source/engine/FrameStore.cpp
-        source/engine/ImageSequenceRecorder.cpp
         source/capture/TestPatternSource.cpp)
     target_include_directories(GriddyTests PRIVATE source)
     target_compile_definitions(GriddyTests PRIVATE JUCE_USE_CURL=0 JUCE_WEB_BROWSER=0)

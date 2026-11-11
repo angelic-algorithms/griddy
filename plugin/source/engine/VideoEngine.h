@@ -4,7 +4,6 @@
 #include "CollageLayout.h"
 #include "Compositor.h"
 #include "FrameStore.h"
-#include "Recorder.h"
 #include "TransportState.h"
 #include "capture/CaptureSource.h"
 
@@ -13,27 +12,17 @@
 namespace griddy
 {
 
-/** When a take starts and stops. Order matches the "recordMode" parameter. */
-enum class RecordMode
-{
-    followDawRecord = 0, // record while armed and the DAW is recording (the usual case)
-    followDawPlay,       // record while armed and the DAW is playing, even if it isn't recording audio
-    manual               // record whenever armed
-};
-
 /** Live settings the engine reads every frame. They point at the plugin's
     parameter values, so automation and the UI change them without locks. */
 struct EngineControls
 {
-    std::atomic<float>* layout = nullptr;
-    std::atomic<float>* switchRate = nullptr;
     std::atomic<float>* numSlots = nullptr;
     std::atomic<float>* recordArm = nullptr;
-    std::atomic<float>* recordMode = nullptr;
+    std::atomic<float>* recordMode = nullptr; // read by TakeRecorder once it is wired in
 };
 
 /** Everything video: owns the cameras, runs the 30 fps compositing loop,
-    feeds the recorder and produces JPEG previews for the UI.
+    and produces JPEG previews for the UI.
 
     Threads involved:
       audio thread    -> writes TransportState (never touches anything here directly)
@@ -77,7 +66,6 @@ public:
 private:
     void run() override;
     void renderOneFrame (double now);
-    void updateRecording (bool shouldRecord, const TransportSnapshot& t);
     void encodePreview (const juce::Image& frame);
     void releaseUnusedSources();
 
@@ -94,13 +82,9 @@ private:
     std::array<juce::String, maxSlots> slotSources;
     std::map<juce::String, std::unique_ptr<CaptureSource>> sources;
 
-    // Recording state lives on the engine thread only, except the bits mirrored for status.
-    std::unique_ptr<Recorder> recorder;
-    int64_t takeFrameIndex = 0;
     juce::File outputFolder;
     mutable std::mutex statusLock;
-    juce::String lastTakePath, lastError, recorderFormat;
-    std::atomic<bool> recording { false };
+    juce::String lastTakePath, lastError;
     std::atomic<double> measuredFps { 0.0 };
 
     // Preview

@@ -34,7 +34,7 @@ jobs:
       - name: Configure
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 
-      - name: Build VST3, AU, CLAP, Standalone and tests
+      - name: Build VST3, AU, Standalone and tests
         run: cmake --build build --parallel
 
       - name: Engine unit tests
@@ -56,7 +56,6 @@ jobs:
           path: |
             plugin/build/Griddy_artefacts/Release/VST3/Griddy.vst3
             plugin/build/Griddy_artefacts/Release/AU/Griddy.component
-            plugin/build/Griddy_artefacts/Release/CLAP/Griddy.clap
             plugin/build/Griddy_artefacts/Release/Standalone/Griddy.app
 
   linux:

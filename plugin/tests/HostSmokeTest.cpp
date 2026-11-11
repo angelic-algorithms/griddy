@@ -2,7 +2,7 @@
 // the things that only show up once the plugin is wrapped:
 //   * the host can scan and open it
 //   * the parameters a DAW would show for automation are there
-//   * transport from the host reaches the video engine (via a recorded take)
+//   * the audio path stays bit exact while the transport moves
 //   * state saved into a "project" restores into a new instance
 //   * the WebView editor opens and closes without crashing
 //
@@ -92,11 +92,6 @@ int main (int argc, char** argv)
     }
 
     ScopedJuceInitialiser_GUI init;
-    // The host only sees the VST3's opaque state, so we can't redirect takes from out here.
-    // Use the plugin's default folder and look for the take this run adds.
-    const auto takesFolder = File::getSpecialLocation (File::userMoviesDirectory).getChildFile ("Griddy");
-    const auto takesBefore = takesFolder.findChildFiles (File::findFilesAndDirectories, false, "Griddy *");
-
     AudioPluginFormatManager fm;
     addDefaultFormatsToManager (fm);
 
@@ -123,7 +118,7 @@ int main (int argc, char** argv)
             names.add (param->getName (64));
         std::cout << "Parameters: " << names.joinIntoString (", ") << std::endl;
 
-        for (const auto* expected : { "Layout", "Switch every", "Cameras", "Record arm", "Record when" })
+        for (const auto* expected : { "Cameras", "Record arm", "Record when" })
             check (names.contains (expected), String ("parameter '") + expected + "' exposed to the host");
 
         FakePlayHead head;
@@ -131,48 +126,13 @@ int main (int argc, char** argv)
         plugin->prepareToPlay (48000.0, 512);
 
         for (auto* param : plugin->getParameters())
-        {
-            if (param->getName (64) == "Record arm")
-                param->setValueNotifyingHost (1.0f);
-            if (param->getName (64) == "Layout")
-                param->setValueNotifyingHost (0.5f); // "Cut"
-        }
+            if (param->getName (64) == "Cameras")
+                param->setValueNotifyingHost (1.0f); // 9 slots
 
-        // Record ~2 seconds while the fake DAW plays and records, then stop the transport.
+        // Play for ~2 seconds, then stop the transport.
         runAudio (*plugin, head, 2.0);
         head.playing = head.recording = false;
         runAudio (*plugin, head, 0.5);
-
-        // A take is a .mov plus a .json on macOS, or a folder of JPEGs with take.json elsewhere.
-        Array<File> newEntries, takes;
-        for (const auto& f : takesFolder.findChildFiles (File::findFilesAndDirectories, false, "Griddy *"))
-            if (! takesBefore.contains (f))
-                newEntries.add (f);
-
-        for (const auto& f : newEntries)
-            if (f.isDirectory() || f.hasFileExtension ("mov"))
-                takes.add (f);
-
-        check (takes.size() == 1, "one take recorded while the DAW was recording");
-
-        if (! takes.isEmpty())
-        {
-            const auto& take = takes.getReference (0);
-            const auto json = JSON::parse (take.isDirectory() ? take.getChildFile ("take.json")
-                                                              : take.withFileExtension ("json"));
-            const auto frames = (int) json["frames"];
-            std::cout << "Take: " << take.getFileName() << " (" << frames << " frames)" << std::endl;
-
-            check (frames > 30, "take has more than 1 second of frames");
-            check (take.isDirectory() ? take.getNumberOfChildFiles (File::findFiles, "*.jpg") == frames
-                                      : take.getSize() > 10000,
-                   "video data is on disk");
-            check ((int) json["startBar"] == 3, "take knows it started at bar 3");
-            check (std::abs ((double) json["bpm"] - 100.0) < 1.0e-9, "take knows the tempo");
-        }
-
-        for (const auto& f : newEntries)
-            f.deleteRecursively();
 
         // Editor: create the WebView UI, let it load, then tear it down.
         {
@@ -201,8 +161,8 @@ int main (int argc, char** argv)
         plugin->setStateInformation (savedState.getData(), (int) savedState.getSize());
 
         for (auto* param : plugin->getParameters())
-            if (param->getName (64) == "Layout")
-                check (param->getCurrentValueAsText() == "Cut", "layout restored from saved state");
+            if (param->getName (64) == "Cameras")
+                check (param->getCurrentValueAsText() == "9", "slot count restored from saved state");
     }
 
     std::cout << (failures == 0 ? "HOST SMOKE TEST PASSED" : "HOST SMOKE TEST FAILED") << std::endl;

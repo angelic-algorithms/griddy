@@ -5,16 +5,6 @@
 namespace griddy
 {
 
-/** How often the collage changes, in musical terms. Order matches the "switchRate" parameter. */
-enum class SwitchRate
-{
-    oneBeat = 0,
-    twoBeats,
-    oneBar,
-    twoBars,
-    fourBars
-};
-
 /** Turns DAW transport info into "where are we musically, right now" for the video thread.
 
     The audio thread only reports at the end of each block, and the video
@@ -35,17 +25,6 @@ public:
 
     /** Length of one bar in quarter notes, from the time signature (7/8 is 3.5). */
     double getBarLengthInQuarterNotes() const noexcept { return barLength; }
-
-    /** Length of one switch period in quarter notes. */
-    double getSwitchLengthInQuarterNotes (SwitchRate rate) const noexcept;
-
-    /** How many switch periods have elapsed since the song start.
-        Same song position always gives the same step, so a second take
-        lines up with the first. */
-    long long getStepIndex (SwitchRate rate) const noexcept;
-
-    /** 0..1 progress through the current switch period, handy for UI meters. */
-    double getStepPhase (SwitchRate rate) const noexcept;
 
     bool isPlaying() const noexcept { return playing; }
 

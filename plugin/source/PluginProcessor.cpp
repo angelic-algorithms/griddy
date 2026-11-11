@@ -9,14 +9,6 @@ juce::AudioProcessorValueTreeState::ParameterLayout GriddyProcessor::createParam
     using namespace juce;
     AudioProcessorValueTreeState::ParameterLayout layout;
 
-    // Choice parameters show up as named steps in the DAW's automation lanes,
-    // so you can automate "Cut" in the chorus and "Grid" in the verse.
-    layout.add (std::make_unique<AudioParameterChoice> (ParameterID { ParamIDs::layout, 1 }, "Layout",
-                                                        StringArray { "Grid", "Cut", "Spotlight" }, 0));
-
-    layout.add (std::make_unique<AudioParameterChoice> (ParameterID { ParamIDs::switchRate, 1 }, "Switch every",
-                                                        StringArray { "1 beat", "2 beats", "1 bar", "2 bars", "4 bars" }, 2));
-
     layout.add (std::make_unique<AudioParameterInt> (ParameterID { ParamIDs::numSlots, 1 }, "Cameras",
                                                      1, VideoEngine::maxSlots, 4));
 
@@ -34,8 +26,6 @@ GriddyProcessor::GriddyProcessor()
       parameters (*this, nullptr, "GriddyState", createParameterLayout())
 {
     EngineControls controls;
-    controls.layout     = parameters.getRawParameterValue (ParamIDs::layout);
-    controls.switchRate = parameters.getRawParameterValue (ParamIDs::switchRate);
     controls.numSlots   = parameters.getRawParameterValue (ParamIDs::numSlots);
     controls.recordArm  = parameters.getRawParameterValue (ParamIDs::recordArm);
     controls.recordMode = parameters.getRawParameterValue (ParamIDs::recordMode);

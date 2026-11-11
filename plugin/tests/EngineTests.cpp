@@ -5,9 +5,9 @@
 #include "engine/CollageLayout.h"
 #include "engine/Compositor.h"
 #include "engine/FrameStore.h"
-#include "engine/ImageSequenceRecorder.h"
 #include "engine/TransportState.h"
 
+#include <set>
 #include <thread>
 
 using namespace griddy;
@@ -42,7 +42,7 @@ struct LayoutTests : juce::UnitTest
         beginTest ("grid uses every slot once and stays inside the frame");
         for (int n = 1; n <= 9; ++n)
         {
-            const auto cells = computeLayout (LayoutMode::grid, n, 0);
+            const auto cells = computeLayout (n);
             expectEquals ((int) cells.size(), n);
 
             std::set<int> seen;
@@ -54,32 +54,13 @@ struct LayoutTests : juce::UnitTest
             expectEquals ((int) seen.size(), n);
         }
 
+        beginTest ("a single slot fills the whole frame");
+        expect (computeLayout (1)[0].area == juce::Rectangle<float> (0, 0, 1, 1));
+
         beginTest ("3 in a 2x2 grid centres the last one");
         {
-            const auto cells = computeLayout (LayoutMode::grid, 3, 0);
+            const auto cells = computeLayout (3);
             expectWithinAbsoluteError (cells[2].area.getCentreX(), 0.5f, 1.0e-5f);
-        }
-
-        beginTest ("cut shows one slot, cycling with the step");
-        for (long long step = 0; step < 8; ++step)
-        {
-            const auto cells = computeLayout (LayoutMode::cut, 3, step);
-            expectEquals ((int) cells.size(), 1);
-            expectEquals (cells[0].slot, (int) (step % 3));
-            expect (cells[0].area == juce::Rectangle<float> (0, 0, 1, 1));
-        }
-
-        beginTest ("negative steps (count in before bar 1) still wrap into range");
-        expectEquals (computeLayout (LayoutMode::cut, 4, -1)[0].slot, 3);
-
-        beginTest ("spotlight features the step's slot, others in the strip");
-        {
-            const auto cells = computeLayout (LayoutMode::spotlight, 4, 5);
-            expectEquals ((int) cells.size(), 4);
-            expectEquals (cells[0].slot, 1); // 5 % 4
-            expectWithinAbsoluteError (cells[0].area.getWidth(), 0.75f, 1.0e-5f);
-            expectEquals (cells[1].slot, 2);
-            expectEquals (cells[3].slot, 0);
         }
     }
 };
@@ -96,9 +77,6 @@ struct BeatClockTests : juce::UnitTest
             BeatClock c;
             c.update (playingAt (8.0), 100.0);
             expectWithinAbsoluteError (c.getPositionInQuarterNotes(), 8.0, 1.0e-9);
-            expectEquals (c.getStepIndex (SwitchRate::oneBeat), 8LL);
-            expectEquals (c.getStepIndex (SwitchRate::oneBar), 2LL);
-            expectEquals (c.getStepIndex (SwitchRate::twoBars), 1LL);
         }
 
         beginTest ("extrapolates between audio blocks at the current tempo");
@@ -134,22 +112,6 @@ struct BeatClockTests : juce::UnitTest
             BeatClock c;
             c.update (playingAt (7.0, 120.0, 7, 8), 0.0);
             expectWithinAbsoluteError (c.getBarLengthInQuarterNotes(), 3.5, 1.0e-12);
-            expectEquals (c.getStepIndex (SwitchRate::oneBar), 2LL);
-        }
-
-        beginTest ("a position a hair under the beat from float error counts as the beat");
-        {
-            BeatClock c;
-            c.update (playingAt (3.9999999999), 0.0);
-            expectEquals (c.getStepIndex (SwitchRate::oneBeat), 4LL);
-        }
-
-        beginTest ("same song position always gives the same step (takes line up)");
-        {
-            BeatClock a, b;
-            a.update (playingAt (33.0), 5.0);
-            b.update (playingAt (33.0), 999.0);
-            expectEquals (a.getStepIndex (SwitchRate::twoBeats), b.getStepIndex (SwitchRate::twoBeats));
         }
     }
 };
@@ -224,7 +186,7 @@ struct CompositorTests : juce::UnitTest
             const std::array<std::shared_ptr<const VideoFrame>, 4> frames { solid (red), solid (blue), solid (green), solid (yellow) };
 
             Compositor comp;
-            comp.render (out, computeLayout (LayoutMode::grid, 4, 0), [&] (int slot) { return frames[(size_t) slot]; });
+            comp.render (out, computeLayout (4), [&] (int slot) { return frames[(size_t) slot]; });
 
             expect (out.getPixelAt (100, 50) == red);
             expect (out.getPixelAt (300, 50) == blue);
@@ -233,22 +195,11 @@ struct CompositorTests : juce::UnitTest
             expect (out.getPixelAt (200, 50) != red && out.getPixelAt (200, 50) != blue, "gap missing between cells");
         }
 
-        beginTest ("cut fills the whole frame with the stepped slot");
-        {
-            juce::Image out (juce::Image::ARGB, 160, 90, true, juce::SoftwareImageType());
-            const std::array<std::shared_ptr<const VideoFrame>, 2> frames { solid (red), solid (blue) };
-
-            Compositor comp;
-            comp.render (out, computeLayout (LayoutMode::cut, 2, 1), [&] (int slot) { return frames[(size_t) slot]; });
-            expect (out.getPixelAt (0, 0) == blue);
-            expect (out.getPixelAt (159, 89) == blue);
-        }
-
         beginTest ("missing camera draws a placeholder, not garbage");
         {
             juce::Image out (juce::Image::ARGB, 160, 90, true, juce::SoftwareImageType());
             Compositor comp;
-            comp.render (out, computeLayout (LayoutMode::cut, 1, 0), [] (int) { return std::shared_ptr<const VideoFrame>(); });
+            comp.render (out, computeLayout (1), [] (int) { return std::shared_ptr<const VideoFrame>(); });
             expect (out.getPixelAt (2, 2) == juce::Colour (0xff1c1c24));
         }
 
@@ -269,9 +220,9 @@ struct CompositorTests : juce::UnitTest
 };
 
 //==============================================================================
-struct SourcesAndRecorderTests : juce::UnitTest
+struct SourcesTests : juce::UnitTest
 {
-    SourcesAndRecorderTests() : UnitTest ("Sources and recorder", "Griddy") {}
+    SourcesTests() : UnitTest ("Sources", "Griddy") {}
 
     void runTest() override
     {
@@ -310,34 +261,6 @@ struct SourcesAndRecorderTests : juce::UnitTest
             src.stop();
             expect (store.latest (src.getId()) == nullptr, "stop() should clear its frame");
         }
-
-        beginTest ("image sequence recorder writes frames and a sidecar with song position");
-        {
-            const auto tmp = juce::File::createTempFile ("griddy-take");
-            TakeInfo info;
-            info.startPpq = 16.0; // bar 5 in 4/4
-            info.bpm = 96.0;
-            info.width = 64;
-            info.height = 36;
-
-            ImageSequenceRecorder rec;
-            juce::String error;
-            expect (rec.start (tmp, info, error), error);
-
-            juce::Image frame (juce::Image::ARGB, 64, 36, true, juce::SoftwareImageType());
-            for (int i = 0; i < 3; ++i)
-                rec.writeFrame (frame, i);
-
-            const auto folder = rec.finish();
-            expectEquals (folder.getNumberOfChildFiles (juce::File::findFiles, "*.jpg"), 3);
-
-            const auto json = juce::JSON::parse (folder.getChildFile ("take.json"));
-            expectEquals ((int) json["startBar"], 5);
-            expectEquals ((double) json["bpm"], 96.0);
-            expectEquals ((int) json["frames"], 3);
-
-            folder.deleteRecursively();
-        }
     }
 };
 
@@ -345,4 +268,4 @@ static LayoutTests layoutTests;
 static BeatClockTests beatClockTests;
 static TransportStateTests transportStateTests;
 static CompositorTests compositorTests;
-static SourcesAndRecorderTests sourcesAndRecorderTests;
+static SourcesTests sourcesAndRecorderTests;

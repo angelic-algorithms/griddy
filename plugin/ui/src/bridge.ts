@@ -31,8 +31,6 @@ export type Status = {
   outputFolder: string;
   lastTake: string;
   lastError: string;
-  recorderFormat: string;
-  recording: boolean;
   fps: number;
   camerasAllowed: boolean;
   cameraBlockedReason: string;
@@ -160,8 +158,6 @@ function boolParam(name: string): BoolParam {
 }
 
 export const params = {
-  layout: choiceParam("layout", ["Grid", "Cut", "Spotlight"], 0),
-  switchRate: choiceParam("switchRate", ["1 beat", "2 beats", "1 bar", "2 bars", "4 bars"], 2),
   numSlots: intParam("numSlots", 1, 9, 4),
   recordArm: boolParam("recordArm"),
   recordMode: choiceParam("recordMode", ["DAW records", "DAW plays", "Armed"], 0),

@@ -42,9 +42,7 @@ function Stepper() {
 export function Controls() {
   return (
     <section className="panel">
-      <h2>Collage</h2>
-      <Segmented label="Layout" param={params.layout} />
-      <Segmented label="Switch every" param={params.switchRate} />
+      <h2>Grid</h2>
       <Stepper />
     </section>
   );

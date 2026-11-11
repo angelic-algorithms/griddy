@@ -18,8 +18,6 @@ GriddyEditor::GriddyEditor (GriddyProcessor& p)
       processor (p),
       engine (p.getEngine()),
       browser (std::make_unique<juce::WebBrowserComponent> (makeBrowserOptions())),
-      layoutAttachment (param (p, ParamIDs::layout), layoutRelay, nullptr),
-      switchRateAttachment (param (p, ParamIDs::switchRate), switchRateRelay, nullptr),
       numSlotsAttachment (param (p, ParamIDs::numSlots), numSlotsRelay, nullptr),
       recordArmAttachment (param (p, ParamIDs::recordArm), recordArmRelay, nullptr),
       recordModeAttachment (param (p, ParamIDs::recordMode), recordModeRelay, nullptr)
@@ -56,8 +54,6 @@ juce::WebBrowserComponent::Options GriddyEditor::makeBrowserOptions()
                                                               .getChildFile ("GriddyWebView2")))
         .withNativeIntegrationEnabled()
         .withKeepPageLoadedWhenBrowserIsHidden()
-        .withOptionsFrom (layoutRelay)
-        .withOptionsFrom (switchRateRelay)
         .withOptionsFrom (numSlotsRelay)
         .withOptionsFrom (recordArmRelay)
         .withOptionsFrom (recordModeRelay)

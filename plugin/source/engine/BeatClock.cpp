@@ -45,32 +45,4 @@ void BeatClock::update (const TransportSnapshot& t, double nowSeconds) noexcept
     position += elapsed * quarterNotesPerSecond;
 }
 
-double BeatClock::getSwitchLengthInQuarterNotes (SwitchRate rate) const noexcept
-{
-    switch (rate)
-    {
-        case SwitchRate::oneBeat:  return 1.0;
-        case SwitchRate::twoBeats: return 2.0;
-        case SwitchRate::oneBar:   return barLength;
-        case SwitchRate::twoBars:  return barLength * 2.0;
-        case SwitchRate::fourBars: return barLength * 4.0;
-    }
-
-    return barLength;
-}
-
-long long BeatClock::getStepIndex (SwitchRate rate) const noexcept
-{
-    const auto len = getSwitchLengthInQuarterNotes (rate);
-    // A tiny epsilon so a position of exactly 3.9999999 from float error still counts as beat 4.
-    return (long long) std::floor ((position + 1.0e-6) / len);
-}
-
-double BeatClock::getStepPhase (SwitchRate rate) const noexcept
-{
-    const auto len = getSwitchLengthInQuarterNotes (rate);
-    const auto p = std::fmod (position, len) / len;
-    return p < 0.0 ? p + 1.0 : p;
-}
-
 } // namespace griddy

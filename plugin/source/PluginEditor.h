@@ -10,7 +10,7 @@ namespace griddy
 /** The plugin window: one WebView that fills it, running the React UI from ui/.
 
     How the two sides talk:
-      * Parameters (layout, switch rate, cameras, record arm, record mode) use
+      * Parameters (cameras, record arm, record mode) use
         JUCE's relays. The UI and DAW automation stay in sync both ways, and
         undo and automation work like any native knob.
       * Native functions are async calls from JS into C++ that return a value:
@@ -43,8 +43,6 @@ private:
     GriddyProcessor& processor;
     VideoEngine& engine;
 
-    juce::WebComboBoxRelay layoutRelay { ParamIDs::layout };
-    juce::WebComboBoxRelay switchRateRelay { ParamIDs::switchRate };
     juce::WebSliderRelay numSlotsRelay { ParamIDs::numSlots };
     juce::WebToggleButtonRelay recordArmRelay { ParamIDs::recordArm };
     juce::WebComboBoxRelay recordModeRelay { ParamIDs::recordMode };
@@ -52,8 +50,6 @@ private:
     // Declared after the relays because its options reference them.
     std::unique_ptr<juce::WebBrowserComponent> browser;
 
-    juce::WebComboBoxParameterAttachment layoutAttachment;
-    juce::WebComboBoxParameterAttachment switchRateAttachment;
     juce::WebSliderParameterAttachment numSlotsAttachment;
     juce::WebToggleButtonParameterAttachment recordArmAttachment;
     juce::WebComboBoxParameterAttachment recordModeAttachment;

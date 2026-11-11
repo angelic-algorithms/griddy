@@ -88,8 +88,6 @@ export function createMock() {
       outputFolder,
       lastTake: "",
       lastError: "",
-      recorderFormat: "H.264 QuickTime",
-      recording: false,
       fps: 30,
       camerasAllowed: true,
       cameraBlockedReason: "",
