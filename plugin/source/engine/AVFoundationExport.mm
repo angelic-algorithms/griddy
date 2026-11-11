@@ -8,7 +8,9 @@
 #import <CoreMedia/CoreMedia.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
+#include <mutex>
 #include <vector>
 
 namespace griddy
@@ -126,64 +128,115 @@ bool exportTakeMovApple (const TakeMeta& meta, const juce::File& takeFolder, con
         auto audioTime = [&] (int64_t pos) { return (double) (pos + leadSamples) / sr; };
 
         error = "stage 4 (append samples)";
-        int vi = 0;
-        int64_t aPos = 0, lastPts = -1;
+
+        // The documented pattern: each input pulls its own samples when the writer is ready for more. The writer
+        // decides the interleave, so there is no ordering for us to get wrong.
+        __block std::atomic<bool> ok { true };
+        __block std::atomic<int> vi { 0 };
+        __block std::atomic<int64_t> aPos { 0 };
+        __block std::mutex errorLock;
+        __block juce::String problem;
         const auto totalAudio = (int64_t) audio.size();
         const int chunk = 2048;
-        std::vector<int16_t> pcm ((size_t) chunk);
-        bool ok = true;
 
-        while (ok && (vi < meta.numFrames || aPos < totalAudio))
-        {
-            const bool wantVideo = vi < meta.numFrames && (aPos >= totalAudio || videoTime (vi) <= audioTime (aPos));
-            AVAssetWriterInput* input = wantVideo ? vin : ain;
+        __block int64_t lastPts = -1;
+        __block std::vector<int16_t> pcm ((size_t) chunk);
 
-            if (! input.isReadyForMoreMediaData)
+        dispatch_group_t group = dispatch_group_create();
+        dispatch_queue_t vq = dispatch_queue_create ("griddy.export.video", DISPATCH_QUEUE_SERIAL);
+        dispatch_queue_t aq = dispatch_queue_create ("griddy.export.audio", DISPATCH_QUEUE_SERIAL);
+
+        dispatch_group_enter (group);
+        [vin requestMediaDataWhenReadyOnQueue: vq usingBlock: ^{
+            while (vin.isReadyForMoreMediaData)
             {
-                [NSThread sleepForTimeInterval: 0.001];
-                if (writer.status == AVAssetWriterStatusFailed)
-                    ok = false;
-                continue;
-            }
-
-            if (wantVideo)
-            {
-                juce::MemoryBlock jpeg;
-                if (! takeFolder.getChildFile ("frames").getChildFile (juce::String::formatted ("%06d.jpg", vi)).loadFileAsData (jpeg) || jpeg.isEmpty())
+                const int i = vi.load();
+                if (i >= meta.numFrames || ! ok.load())
                 {
-                    error = "missing frame " + juce::String (vi);
-                    ok = false;
-                    break;
+                    [vin markAsFinished];
+                    dispatch_group_leave (group);
+                    return;
                 }
 
-                auto pts = (int64_t) std::llround (videoTime (vi) * 30000.0);
+                juce::MemoryBlock jpeg;
+                if (! takeFolder.getChildFile ("frames").getChildFile (juce::String::formatted ("%06d.jpg", i)).loadFileAsData (jpeg) || jpeg.isEmpty())
+                {
+                    const std::scoped_lock sl (errorLock);
+                    problem = "missing frame " + juce::String (i);
+                    ok = false;
+                    continue;
+                }
+
+                auto pts = (int64_t) std::llround ((meta.frameTimes[(size_t) i] + meta.videoOffsetSeconds() + lead) * 30000.0);
                 if (pts <= lastPts)
                     pts = lastPts + 1;
                 lastPts = pts;
 
                 CMSampleBufferRef sb = makeVideoSample (jpeg.getData(), jpeg.getSize(), vfd, CMTimeMake (pts, 30000), CMTimeMake (1000, 30000));
-                ok = sb != nullptr && [vin appendSampleBuffer: sb];
+                const bool appended = sb != nullptr && [vin appendSampleBuffer: sb];
                 if (sb != nullptr)
                     CFRelease (sb);
-                ++vi;
-            }
-            else
-            {
-                const auto n = (int) std::min<int64_t> (chunk, totalAudio - aPos);
-                for (int i = 0; i < n; ++i)
-                    pcm[(size_t) i] = (int16_t) std::clamp (std::lround (audio[(size_t) (aPos + i)] * 32767.0f), -32768l, 32767l);
 
-                CMSampleBufferRef sb = makeAudioSample (pcm.data(), n, sr, afd, aPos + leadSamples);
-                ok = sb != nullptr && [ain appendSampleBuffer: sb];
+                if (! appended)
+                {
+                    const std::scoped_lock sl (errorLock);
+                    problem = "video append failed at frame " + juce::String (i);
+                    ok = false;
+                }
+
+                vi = i + 1;
+            }
+        }];
+
+        dispatch_group_enter (group);
+        [ain requestMediaDataWhenReadyOnQueue: aq usingBlock: ^{
+            while (ain.isReadyForMoreMediaData)
+            {
+                const auto pos = aPos.load();
+                if (pos >= totalAudio || ! ok.load())
+                {
+                    [ain markAsFinished];
+                    dispatch_group_leave (group);
+                    return;
+                }
+
+                const auto n = (int) std::min<int64_t> (chunk, totalAudio - pos);
+                for (int k = 0; k < n; ++k)
+                    pcm[(size_t) k] = (int16_t) std::clamp (std::lround (audio[(size_t) (pos + k)] * 32767.0f), -32768l, 32767l);
+
+                CMSampleBufferRef sb = makeAudioSample (pcm.data(), n, sr, afd, pos + leadSamples);
+                const bool appended = sb != nullptr && [ain appendSampleBuffer: sb];
                 if (sb != nullptr)
                     CFRelease (sb);
-                aPos += n;
+
+                if (! appended)
+                {
+                    const std::scoped_lock sl (errorLock);
+                    problem = "audio append failed at sample " + juce::String ((int) pos);
+                    ok = false;
+                }
+
+                aPos = pos + n;
             }
+        }];
+
+        // Never wait forever: a stuck writer must not hang the app.
+        if (dispatch_group_wait (group, dispatch_time (DISPATCH_TIME_NOW, (int64_t) (60.0 * NSEC_PER_SEC))) != 0)
+        {
+            ok = false;
+            [writer cancelWriting];
+            CFRelease (vfd);
+            CFRelease (afd);
+            error = "timed out appending (video frames " + juce::String (vi.load()) + " of " + juce::String (meta.numFrames) + ", audio " + juce::String ((int) aPos.load()) + " of " + juce::String ((int) totalAudio) + ", writer status " + juce::String ((int) writer.status) + ")";
+            tmp.deleteFile();
+            return false;
         }
 
-        error = "stage 5 (finish)";
-        [vin markAsFinished];
-        [ain markAsFinished];
+        if (! problem.isEmpty())
+            error = problem;
+
+        if (error.startsWith ("stage"))
+            error = "stage 5 (finish)";
 
         dispatch_semaphore_t done = dispatch_semaphore_create (0);
         [writer finishWritingWithCompletionHandler: ^{ dispatch_semaphore_signal (done); }];
@@ -192,11 +245,11 @@ bool exportTakeMovApple (const TakeMeta& meta, const juce::File& takeFolder, con
         CFRelease (vfd);
         CFRelease (afd);
 
-        if (! ok || writer.status != AVAssetWriterStatusCompleted)
+        if (! ok.load() || writer.status != AVAssetWriterStatusCompleted)
         {
             if (writer.error != nil)
                 error += " " + juce::String::fromUTF8 ([[writer.error description] UTF8String]);
-            error += " (status " + juce::String ((int) writer.status) + ", video frames appended " + juce::String (vi) + ", audio samples " + juce::String ((int) aPos) + ")";
+            error += " (status " + juce::String ((int) writer.status) + ", video frames appended " + juce::String (vi.load()) + ", audio samples " + juce::String ((int) aPos.load()) + ")";
             tmp.deleteFile();
             return false;
         }
