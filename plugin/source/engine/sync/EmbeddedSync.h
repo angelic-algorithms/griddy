@@ -11,12 +11,12 @@
 namespace griddy::embedded
 {
 
-// The Griddy sync signal: a faint 18 kHz carrier, differential BPSK, 400 baud.
+// The Griddy sync signal: a faint 18 kHz carrier, differential BPSK, 800 baud.
 // One symbol is round(sampleRate / 400) samples. A frame is 48 bits (16 sync, 8 take tag,
 // 16 frame counter, 8 CRC) so it lasts 120 ms at 48 kHz. Frame k of a take covers take
 // samples ((48 k + 1) L) to ((48 k + 49) L), after one reference symbol at the start.
 inline constexpr double carrierHz = 18000.0;
-inline constexpr int baud = 400;
+inline constexpr int baud = 800;
 inline constexpr int frameBits = 48;
 inline constexpr uint16_t syncWord = 0xB5C3;
 inline constexpr float defaultAmplitude = 0.003f; // about minus 50 dBFS

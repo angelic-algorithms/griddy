@@ -885,10 +885,10 @@ void embeddedSync()
 
     const auto l1 = lockTime (s, 0.5);
     metric ("embedded lock, trimmed and moved", l1 * 1000.0, "ms");
-    check (l1 >= 0.0 && l1 < 0.45, "trimmed and moved Griddy clip locks in " + juce::String (l1, 3) + " s");
+    check (l1 >= 0.0 && l1 < 0.15, "trimmed and moved Griddy clip locks in " + juce::String (l1, 3) + " s");
     const auto l2 = lockTime (s, 4.0);
     metric ("embedded lock, whole clip moved", l2 * 1000.0, "ms");
-    check (l2 >= 0.0 && l2 < 0.45, "moved Griddy clip locks in " + juce::String (l2, 3) + " s");
+    check (l2 >= 0.0 && l2 < 0.15, "moved Griddy clip locks in " + juce::String (l2, 3) + " s");
 
     int embeddedKinds = 0, n = 0;
     for (const auto& x : s)
