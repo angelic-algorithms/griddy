@@ -36,6 +36,25 @@ else()
 endif()
 
 # ----------------------------------------------------------------------------
+# The engine core: take recording, history, decoding, sync, playback. No plugin or UI code,
+# so the tests and the headless harness build exactly the same sources the plugin does.
+# ----------------------------------------------------------------------------
+set(GRIDDY_CORE_SOURCES
+    source/engine/BeatClock.cpp
+    source/engine/CollageLayout.cpp
+    source/engine/Compositor.cpp
+    source/engine/FrameStore.cpp
+    source/engine/TakeFormat.cpp
+    source/engine/TakeHistory.cpp
+    source/engine/TakeRecorder.cpp
+    source/engine/VideoDecoder.cpp
+    source/engine/SyncController.cpp
+    source/engine/SlotPlayer.cpp
+    source/engine/PlaybackEngine.cpp
+    source/engine/sync/EmbeddedSync.cpp
+    source/engine/sync/Fingerprint.cpp)
+
+# ----------------------------------------------------------------------------
 # The plugin
 # ----------------------------------------------------------------------------
 juce_add_plugin(Griddy
@@ -66,10 +85,7 @@ target_sources(Griddy PRIVATE
     source/PluginProcessor.cpp
     source/PluginEditor.cpp
     source/UiResources.cpp
-    source/engine/BeatClock.cpp
-    source/engine/CollageLayout.cpp
-    source/engine/Compositor.cpp
-    source/engine/FrameStore.cpp
+    ${GRIDDY_CORE_SOURCES}
     source/engine/VideoEngine.cpp
     source/capture/TestPatternSource.cpp
     source/capture/CaptureDevices.cpp)
@@ -139,10 +155,8 @@ if(GRIDDY_BUILD_TESTS)
     target_sources(GriddyTests PRIVATE
         tests/TestMain.cpp
         tests/EngineTests.cpp
-        source/engine/BeatClock.cpp
-        source/engine/CollageLayout.cpp
-        source/engine/Compositor.cpp
-        source/engine/FrameStore.cpp
+        tests/EngineSyncTests.cpp
+        ${GRIDDY_CORE_SOURCES}
         source/capture/TestPatternSource.cpp)
     target_include_directories(GriddyTests PRIVATE source)
     target_compile_definitions(GriddyTests PRIVATE JUCE_USE_CURL=0 JUCE_WEB_BROWSER=0)
