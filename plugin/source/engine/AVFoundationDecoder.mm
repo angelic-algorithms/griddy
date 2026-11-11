@@ -120,6 +120,15 @@ public:
 
             // At the very start the reader first hands out an empty black buffer carrying the same time stamp as frame 0.
             // When two buffers share a time stamp, the first is that placeholder.
+            if (std::getenv ("GRIDDY_DEBUG_DECODER") != nullptr && index < 3)
+            {
+                CFArrayRef att = CMSampleBufferGetSampleAttachmentsArray (sb, false);
+                fprintf (stderr, "[avf] decode(%d): pts %.5f dur %.5f stamp %.5f samples %ld size %zu attachments %s\n", index,
+                         CMTimeGetSeconds (CMSampleBufferGetPresentationTimeStamp (sb)), CMTimeGetSeconds (CMSampleBufferGetDuration (sb)),
+                         stamps[(size_t) index], (long) CMSampleBufferGetNumSamples (sb), CMSampleBufferGetTotalSampleSize (sb),
+                         att != nullptr && CFArrayGetCount (att) > 0 ? [[(__bridge NSDictionary*) CFArrayGetValueAtIndex (att, 0) description] UTF8String] : "none");
+            }
+
             if (index == 0 && startedAtZero)
             {
                 startedAtZero = false;
@@ -128,6 +137,8 @@ public:
                 {
                     const auto a = CMTimeGetSeconds (CMSampleBufferGetPresentationTimeStamp (sb));
                     const auto b = CMTimeGetSeconds (CMSampleBufferGetPresentationTimeStamp (second));
+                    if (std::getenv ("GRIDDY_DEBUG_DECODER") != nullptr)
+                        fprintf (stderr, "[avf] second buffer pts %.5f (first %.5f)\n", b, a);
                     if (std::abs (a - b) < 1.0e-4)
                     {
                         CFRelease (sb);
