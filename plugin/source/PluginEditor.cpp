@@ -90,7 +90,8 @@ juce::WebBrowserComponent::Options GriddyEditor::makeBrowserOptions()
         {
             if (args.size() > 2)
                 hub.setLayout ((Canvas) juce::jlimit (0, 3, (int) args[0]), (float) (double) args[1],
-                               (uint32_t) args[2].toString().getHexValue32());
+                               (uint32_t) args[2].toString().getHexValue32(),
+                               (Template) juce::jlimit (0, numTemplates - 1, args.size() > 3 ? (int) args[3] : 0));
 
             complete (hub.layoutToVar());
         })

@@ -54,6 +54,40 @@ struct LayoutTests : juce::UnitTest
             expectEquals ((int) seen.size(), n);
         }
 
+        beginTest ("every template covers the frame exactly, with no overlap, for 2 to 9 slots");
+        for (int t = 0; t < numTemplates; ++t)
+            for (int n = 2; n <= 9; ++n)
+            {
+                const auto shape = (Template) t;
+                const auto cells = computeLayout (n, shape);
+                expectEquals ((int) cells.size(), n);
+
+                std::set<int> seen;
+                float area = 0.0f;
+                for (size_t i = 0; i < cells.size(); ++i)
+                {
+                    seen.insert (cells[i].slot);
+                    area += cells[i].area.getWidth() * cells[i].area.getHeight();
+                    expect (juce::Rectangle<float> (0, 0, 1, 1).expanded (1.0e-5f).contains (cells[i].area), "cell outside frame");
+
+                    for (size_t j = i + 1; j < cells.size(); ++j)
+                        expect (cells[i].area.reduced (1.0e-4f).getIntersection (cells[j].area.reduced (1.0e-4f)).isEmpty(), "cells overlap");
+                }
+
+                expectEquals ((int) seen.size(), n);
+                if (shape != Template::grid)
+                    expectWithinAbsoluteError (area, 1.0f, 1.0e-4f);
+            }
+
+        beginTest ("hero shapes give cell 0 the larger area");
+        for (auto shape : { Template::heroLeft, Template::heroTop })
+            for (int n = 2; n <= 9; ++n)
+            {
+                const auto cells = computeLayout (n, shape);
+                for (size_t i = 1; i < cells.size(); ++i)
+                    expect (cells[0].area.getWidth() * cells[0].area.getHeight() > cells[i].area.getWidth() * cells[i].area.getHeight());
+            }
+
         beginTest ("a single slot fills the whole frame");
         expect (computeLayout (1)[0].area == juce::Rectangle<float> (0, 0, 1, 1));
 

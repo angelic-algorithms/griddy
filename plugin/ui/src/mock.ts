@@ -83,8 +83,8 @@ export function createMock() {
           return true;
         }
         case "setLayout": {
-          const [canvas, gap, background] = args as [number, number, string];
-          layout = { ...layout, canvas, gap, background };
+          const [canvas, gap, background, template] = args as [number, number, string, number];
+          layout = { ...layout, canvas, gap, background, template };
           return layout;
         }
         case "swapCells": {
@@ -115,7 +115,7 @@ export function createMock() {
     bool: () => store(false),
   };
 
-  let layout = { canvas: 0, gap: 4, background: "0b0b0f", order: [0, 1, 2, 3, 4, 5, 6, 7, 8] };
+  let layout = { canvas: 0, template: 0, gap: 4, background: "0b0b0f", order: [0, 1, 2, 3, 4, 5, 6, 7, 8] };
   let takes = [
     { id: 3, state: "review", seconds: 12.4, slip: 0, hasMov: true },
     { id: 2, state: "kept", seconds: 12.1, slip: 0.02, hasMov: true },

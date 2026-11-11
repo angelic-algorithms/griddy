@@ -21,6 +21,7 @@ namespace griddy
 struct GridLayout
 {
     Canvas canvas = Canvas::hd720;
+    Template shape = Template::grid;
     float gap = 4.0f;                 // pixels between cells at the canvas size
     uint32_t background = 0xff0b0b0fu;
     std::array<int, 9> order { 0, 1, 2, 3, 4, 5, 6, 7, 8 }; // which slot sits in each cell, in reading order
@@ -111,7 +112,7 @@ public:
 
     // ---- grid layout (any instance can change it; the master instance is where the UI puts these controls) ----
     GridLayout getLayout() const;
-    void setLayout (Canvas canvas, float gap, uint32_t background);
+    void setLayout (Canvas canvas, float gap, uint32_t background, Template shape = Template::grid);
     bool swapCells (int a, int b);
     juce::var layoutToVar() const;
     void applyLayoutVar (const juce::var& v);

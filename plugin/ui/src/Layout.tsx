@@ -3,6 +3,7 @@ import { api, EngineStatus } from "./bridge";
 const canvases = ["16:9", "1:1", "9:16"];
 // Engine canvas numbers: 0 is 1280x720, 1 is 1920x1080, 2 is 1:1, 3 is 9:16. The picker offers three shapes.
 const canvasIndex = [0, 2, 3];
+const templates = ["Grid", "Row", "Column", "Hero left", "Hero top", "Two rows"];
 const swatches = ["0b0b0f", "000000", "ffffff", "1c1c24", "7c6cff", "ff4d5e"];
 
 /** The look of the grid. Changing it never touches the takes, only how they are laid out. */
@@ -11,7 +12,8 @@ export function LayoutPanel({ engine }: { engine: EngineStatus }) {
   const active = Math.max(1, engine.slots.length);
   const shape = canvasIndex.indexOf(layout.canvas);
 
-  const set = (canvas: number, gap: number, background: string) => api.setLayout(canvas, gap, background);
+  const set = (canvas: number, gap: number, background: string, template = layout.template) =>
+    api.setLayout(canvas, gap, background, template);
 
   // The cells in reading order, each showing which slot sits there.
   const cells = Array.from({ length: active }, (_, i) => layout.order[i] ?? i);
@@ -33,6 +35,20 @@ export function LayoutPanel({ engine }: { engine: EngineStatus }) {
         </div>
       </div>
 
+      {active > 1 && (
+        <div className="field">
+          <span className="field-label">Layout</span>
+          <div className="templates" role="radiogroup" aria-label="Layout">
+            {templates.map((label, i) => (
+              <button key={label} role="radio" aria-checked={i === layout.template} className={i === layout.template ? "on" : ""}
+                onClick={() => set(layout.canvas, layout.gap, layout.background, i)}>
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="field">
         <span className="field-label">Frame thickness · {layout.gap.toFixed(0)} px</span>
         <input type="range" min={0} max={24} step={1} value={layout.gap}
@@ -50,7 +66,7 @@ export function LayoutPanel({ engine }: { engine: EngineStatus }) {
       </div>
 
       <div className="field">
-        <span className="field-label">Order of the cells (click two to swap)</span>
+        <span className="field-label">Order of the cells (click two to swap; the first cell is the big one in a Hero layout)</span>
         <CellPicker cells={cells} columns={columns} />
       </div>
     </section>

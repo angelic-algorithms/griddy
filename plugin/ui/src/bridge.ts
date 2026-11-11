@@ -51,7 +51,7 @@ export type SlotInfo = {
   lockMs: number;
 };
 
-export type Layout = { canvas: number; gap: number; background: string; order: number[] };
+export type Layout = { canvas: number; template: number; gap: number; background: string; order: number[] };
 
 export type EngineStatus = {
   session: string;
@@ -108,7 +108,7 @@ export const api = {
   retakeTake: native<boolean>("retakeTake") as (slot: number, id: number) => Promise<boolean>,
   restoreTake: native<boolean>("restoreTake") as (slot: number, id: number) => Promise<boolean>,
   setSlip: native<boolean>("setSlip") as (slot: number, id: number, seconds: number) => Promise<boolean>,
-  setLayout: native<Layout>("setLayout") as (canvas: number, gap: number, background: string) => Promise<Layout>,
+  setLayout: native<Layout>("setLayout") as (canvas: number, gap: number, background: string, template: number) => Promise<Layout>,
   swapCells: native<boolean>("swapCells") as (a: number, b: number) => Promise<boolean>,
 };
 

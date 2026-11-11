@@ -119,3 +119,6 @@ button.ghost.on { border-color: var(--accent); color: var(--accent); }
 .cells button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
 input[type="range"] { width: 100%; accent-color: var(--accent); }
 .preview { aspect-ratio: auto; }
+.templates { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
+.templates button { padding: 5px 2px; font-size: 12px; }
+.templates button.on { background: var(--accent); border-color: var(--accent); color: #fff; }

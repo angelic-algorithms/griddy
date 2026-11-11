@@ -534,10 +534,11 @@ GridLayout Hub::getLayout() const
     return layout;
 }
 
-void Hub::setLayout (Canvas canvas, float gap, uint32_t background)
+void Hub::setLayout (Canvas canvas, float gap, uint32_t background, Template shape)
 {
     const std::scoped_lock sl (layoutLock);
     layout.canvas = canvas;
+    layout.shape = shape;
     layout.gap = juce::jlimit (0.0f, 48.0f, gap);
     layout.background = background | 0xff000000u;
 }
@@ -559,6 +560,7 @@ juce::var Hub::layoutToVar() const
     const auto l = getLayout();
     auto o = std::make_unique<juce::DynamicObject>();
     o->setProperty ("canvas", (int) l.canvas);
+    o->setProperty ("template", (int) l.shape);
     o->setProperty ("gap", (double) l.gap);
     o->setProperty ("background", juce::String::toHexString ((int) (l.background & 0xffffffu)).paddedLeft ('0', 6));
 
@@ -577,7 +579,7 @@ void Hub::applyLayoutVar (const juce::var& v)
     const auto canvas = juce::jlimit (0, 3, (int) v.getProperty ("canvas", 0));
     const auto gap = (float) (double) v.getProperty ("gap", 4.0);
     const auto bg = (uint32_t) juce::String (v.getProperty ("background", "0b0b0f")).getHexValue32();
-    setLayout ((Canvas) canvas, gap, bg);
+    setLayout ((Canvas) canvas, gap, bg, (Template) juce::jlimit (0, numTemplates - 1, (int) v.getProperty ("template", 0)));
 
     if (const auto* order = v.getProperty ("order", {}).getArray(); order != nullptr && order->size() == 9)
     {
@@ -628,7 +630,7 @@ void Hub::drawPreview()
     compositor.setBackground (look.background);
 
     // The cell order is only honoured if it is a real permutation of the active slots.
-    auto cells = computeLayout (active);
+    auto cells = computeLayout (active, look.shape);
     {
         uint32_t seen = 0;
         bool valid = true;
