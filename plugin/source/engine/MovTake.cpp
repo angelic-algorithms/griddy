@@ -1,5 +1,7 @@
 #include "MovTake.h"
 
+#include <cstdio>
+
 #ifdef GRIDDY_HAVE_FFMPEG
 extern "C"
 {
@@ -27,7 +29,9 @@ bool movExportAvailable() { return true; }
 bool exportTakeMov (const TakeMeta& m, const juce::File& f, const juce::File& o, juce::String& e)
 {
     e = "apple exporter started";
+    std::fprintf (stderr, "[take.mov] apple exporter: %d frames, %zu frame times, folder %s\n", m.numFrames, m.frameTimes.size(), f.getFullPathName().toRawUTF8());
     const auto ok = exportTakeMovApple (m, f, o, e);
+    std::fprintf (stderr, "[take.mov] apple exporter finished: ok %d, message '%s'\n", ok ? 1 : 0, e.toRawUTF8());
     if (! ok && e == "apple exporter started")
         e = "apple exporter returned false and left no message";
     return ok;
