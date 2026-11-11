@@ -24,12 +24,6 @@ namespace
 class AVFoundationDecoder final : public VideoDecoder
 {
 public:
-    ~AVFoundationDecoder() override
-    {
-        if (stash != nullptr)
-            CFRelease (stash);
-    }
-
     bool open (const TakeMeta& meta, const juce::File& takeFolder, bool useProxy) override
     {
         @autoreleasepool
@@ -96,18 +90,8 @@ public:
                 if (! startReader (index))
                     return {};
 
-            const bool fresh = (reader == nil) || index != lastIndex + 1;
-            (void) fresh;
             lastIndex = index;
-            CMSampleBufferRef sb = nullptr;
-
-            if (stash != nullptr)
-            {
-                sb = stash;
-                stash = nullptr;
-            }
-            else
-                sb = [output copyNextSampleBuffer];
+            CMSampleBufferRef sb = [output copyNextSampleBuffer];
 
             if (sb == nullptr)
             {
@@ -118,35 +102,19 @@ public:
                     return {};
             }
 
-            // At the very start the reader first hands out an empty black buffer carrying the same time stamp as frame 0.
-            // When two buffers share a time stamp, the first is that placeholder.
-            if (std::getenv ("GRIDDY_DEBUG_DECODER") != nullptr && index < 3)
-            {
-                CFArrayRef att = CMSampleBufferGetSampleAttachmentsArray (sb, false);
-                fprintf (stderr, "[avf] decode(%d): pts %.5f dur %.5f stamp %.5f samples %ld size %zu attachments %s\n", index,
-                         CMTimeGetSeconds (CMSampleBufferGetPresentationTimeStamp (sb)), CMTimeGetSeconds (CMSampleBufferGetDuration (sb)),
-                         stamps[(size_t) index], (long) CMSampleBufferGetNumSamples (sb), CMSampleBufferGetTotalSampleSize (sb),
-                         att != nullptr && CFArrayGetCount (att) > 0 ? [[(__bridge NSDictionary*) CFArrayGetValueAtIndex (att, 0) description] UTF8String] : "none");
-            }
-
-            if (index == 0 && startedAtZero)
+            // A freshly started reader first hands out a black placeholder stamped just before the range start.
+            // Anything stamped before the wanted frame is that, not a picture.
+            if (startedAtZero)
             {
                 startedAtZero = false;
-                CMSampleBufferRef second = [output copyNextSampleBuffer];
-                if (second != nullptr)
+                while (sb != nullptr && CMTimeGetSeconds (CMSampleBufferGetPresentationTimeStamp (sb)) < stamps[(size_t) index] - 0.0005)
                 {
-                    const auto a = CMTimeGetSeconds (CMSampleBufferGetPresentationTimeStamp (sb));
-                    const auto b = CMTimeGetSeconds (CMSampleBufferGetPresentationTimeStamp (second));
-                    if (std::getenv ("GRIDDY_DEBUG_DECODER") != nullptr)
-                        fprintf (stderr, "[avf] second buffer pts %.5f (first %.5f)\n", b, a);
-                    if (std::abs (a - b) < 1.0e-4)
-                    {
-                        CFRelease (sb);
-                        sb = second;
-                    }
-                    else
-                        stash = second;
+                    CFRelease (sb);
+                    sb = [output copyNextSampleBuffer];
                 }
+
+                if (sb == nullptr)
+                    return {};
             }
 
             auto img = toImage (sb);
@@ -161,12 +129,7 @@ private:
     bool startReader (int index)
     {
         NSError* error = nil;
-        if (stash != nullptr)
-        {
-            CFRelease (stash);
-            stash = nullptr;
-        }
-        startedAtZero = (index == 0);
+        startedAtZero = true;
         reader = [[AVAssetReader alloc] initWithAsset: asset error: &error];
         if (reader == nil)
             return false;
@@ -211,7 +174,6 @@ private:
     AVAssetReader* reader = nil;
     AVAssetReaderTrackOutput* output = nil;
     std::vector<double> stamps;
-    CMSampleBufferRef stash = nullptr;
     bool startedAtZero = false;
     int outW = 0, outH = 0, lastIndex = -10;
 };
