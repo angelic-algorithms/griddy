@@ -127,7 +127,10 @@ private:
         SlotPlayer player;
 
         std::map<int32_t, std::shared_ptr<const fingerprint::Index>> indexCache;
-        std::vector<float> driftMs;
+        // Drift as a histogram (0.25 ms bins up to 500 ms), so a long run uses constant memory.
+        std::vector<uint32_t> driftBins = std::vector<uint32_t> (2001, 0);
+        uint64_t driftCount = 0;
+        double driftSum = 0.0, driftMax = 0.0;
         int lastShownIndex = -1;
         int32_t lastShownTake = -1;
         double lastShownTarget = 0.0;

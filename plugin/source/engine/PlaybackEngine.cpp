@@ -201,9 +201,11 @@ juce::Image PlaybackEngine::renderOnce()
             const auto target = f->targetSeconds + (f->playing ? wall - f->publishWall : 0.0);
             {
                 const std::scoped_lock sl (statsLock);
-                s.driftMs.push_back ((float) (std::abs (f->frameTakeSeconds - target) * 1000.0));
-                if (s.driftMs.size() > 400000)
-                    s.driftMs.erase (s.driftMs.begin(), s.driftMs.begin() + 200000);
+                const auto d = std::abs (f->frameTakeSeconds - target) * 1000.0;
+                ++s.driftBins[(size_t) std::min (2000.0, d * 4.0)];
+                ++s.driftCount;
+                s.driftSum += d;
+                s.driftMax = std::max (s.driftMax, d);
             }
 
             // A picture that advanced by a different number of frames than the clock did is a stutter.
@@ -271,26 +273,40 @@ SlotDriftStats PlaybackEngine::driftStats (int slot) const
 {
     const auto& s = *slots[(size_t) slot];
     SlotDriftStats out;
-    std::vector<float> v;
+    std::vector<uint32_t> bins;
+    uint64_t count;
+    double sum, mx;
     {
         const std::scoped_lock sl (statsLock);
-        v = s.driftMs;
+        bins = s.driftBins;
+        count = s.driftCount;
+        sum = s.driftSum;
+        mx = s.driftMax;
     }
-    out.skippedFrames = s.skipped;
-    out.samples = v.size();
 
-    if (v.empty())
+    out.skippedFrames = s.skipped;
+    out.samples = count;
+
+    if (count == 0)
         return out;
 
-    std::sort (v.begin(), v.end());
-    double sum = 0.0;
-    for (auto x : v)
-        sum += x;
+    auto percentile = [&] (double q)
+    {
+        const auto target = (uint64_t) ((double) count * q);
+        uint64_t seen = 0;
+        for (size_t i = 0; i < bins.size(); ++i)
+        {
+            seen += bins[i];
+            if (seen > target)
+                return (double) i * 0.25;
+        }
+        return mx;
+    };
 
-    out.meanMs = sum / (double) v.size();
-    out.p50Ms = v[v.size() / 2];
-    out.p99Ms = v[(size_t) ((double) v.size() * 0.99)];
-    out.maxMs = v.back();
+    out.meanMs = sum / (double) count;
+    out.p50Ms = percentile (0.5);
+    out.p99Ms = percentile (0.99);
+    out.maxMs = mx;
     return out;
 }
 
