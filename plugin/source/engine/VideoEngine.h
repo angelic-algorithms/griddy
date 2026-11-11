@@ -53,6 +53,12 @@ public:
     juce::String setSlotSource (int slot, const juce::String& sourceId);
     std::array<juce::String, maxSlots> getSlotSources() const;
 
+    /** The newest camera frame in a slot, or null. Any thread. */
+    std::shared_ptr<const VideoFrame> latestFrame (int slot) const;
+
+    /** The live collage and its preview are only needed when nothing else draws the picture. */
+    void setComposeEnabled (bool on) noexcept { composeEnabled = on; }
+
     void setOutputFolder (const juce::File& folder);
     juce::File getOutputFolder() const;
 
@@ -93,6 +99,7 @@ private:
     std::atomic<int64_t> previewSerial { 0 };
     juce::Image previewImage { juce::Image::ARGB, previewWidth, previewHeight, true, juce::SoftwareImageType() };
     juce::JPEGImageFormat previewFormat;
+    std::atomic<bool> composeEnabled { true };
     int64_t framesRendered = 0;
 
     juce::String cameraBlockedReason;

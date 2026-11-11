@@ -38,14 +38,20 @@ GriddyProcessor::GriddyProcessor()
         engine->setSlotSource (slot, "test:" + juce::String (slot + 1));
 
     engine->startEngine();
+
+    host = std::make_unique<EngineHost> (*engine, controls);
 }
 
 GriddyProcessor::~GriddyProcessor()
 {
+    host.reset();
     engine->stopEngine();
 }
 
-void GriddyProcessor::prepareToPlay (double, int) {}
+void GriddyProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
+{
+    host->prepare (sampleRate, samplesPerBlock);
+}
 void GriddyProcessor::releaseResources() {}
 
 bool GriddyProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
@@ -79,6 +85,8 @@ void GriddyProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
             s.ppqLastBarStart = pos->getPpqPositionOfLastBarStart().orFallback (0.0);
             s.isPlaying = pos->getIsPlaying();
             s.isRecording = pos->getIsRecording();
+            s.isLooping = pos->getIsLooping();
+            s.timeInSamples = pos->getTimeInSamples().orFallback (0);
 
             if (const auto sig = pos->getTimeSignature())
             {
@@ -89,6 +97,9 @@ void GriddyProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
     }
 
     transport.write (s);
+
+    // Hand the same block to the recorder and the playback engine.
+    host->processBlock (buffer, s);
 }
 
 juce::AudioProcessorEditor* GriddyProcessor::createEditor()
@@ -113,6 +124,8 @@ void GriddyProcessor::getStateInformation (juce::MemoryBlock& destData)
     state.removeChild (state.getChildWithName ("Slots"), nullptr);
     state.appendChild (slots, nullptr);
     state.setProperty ("outputFolder", engine->getOutputFolder().getFullPathName(), nullptr);
+    state.setProperty ("session", host->getSession(), nullptr);
+    state.setProperty ("targetSlot", host->getTargetSlot(), nullptr);
 
     if (auto xml = state.createXml())
         copyXmlToBinary (*xml, destData);
@@ -140,6 +153,9 @@ void GriddyProcessor::setStateInformation (const void* data, int sizeInBytes)
 
     if (const auto folder = state.getProperty ("outputFolder").toString(); juce::File::isAbsolutePath (folder))
         engine->setOutputFolder (juce::File (folder));
+
+    host->setTargetSlot ((int) state.getProperty ("targetSlot", 0));
+    host->setSession (state.getProperty ("session").toString());
 
     parameters.replaceState (state);
 }

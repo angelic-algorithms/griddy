@@ -22,6 +22,8 @@ struct TransportSnapshot
     bool isRecording = false;
     bool hostProvidedPosition = false; // false when the host gave us no play head at all
     int64_t updateCounter = 0;         // bumps every audio block, so readers can tell it's fresh
+    int64_t timeInSamples = 0;         // host time of the first sample of the last block
+    bool isLooping = false;
 };
 
 /** A single writer, many reader snapshot using a sequence lock.
@@ -76,6 +78,8 @@ private:
         recording.store (s.isRecording, std::memory_order_relaxed);
         hasPos.store (s.hostProvidedPosition, std::memory_order_relaxed);
         counter.store (s.updateCounter, std::memory_order_relaxed);
+        samples.store (s.timeInSamples, std::memory_order_relaxed);
+        looping.store (s.isLooping, std::memory_order_relaxed);
     }
 
     TransportSnapshot loadFields() const noexcept
@@ -90,6 +94,8 @@ private:
         s.isRecording = recording.load (std::memory_order_relaxed);
         s.hostProvidedPosition = hasPos.load (std::memory_order_relaxed);
         s.updateCounter = counter.load (std::memory_order_relaxed);
+        s.timeInSamples = samples.load (std::memory_order_relaxed);
+        s.isLooping = looping.load (std::memory_order_relaxed);
         return s;
     }
 
@@ -97,7 +103,8 @@ private:
     std::atomic<double> bpm { 120.0 }, ppq { 0.0 }, barStart { 0.0 };
     std::atomic<int> num { 4 }, den { 4 };
     std::atomic<bool> playing { false }, recording { false }, hasPos { false };
-    std::atomic<int64_t> counter { 0 };
+    std::atomic<int64_t> counter { 0 }, samples { 0 };
+    std::atomic<bool> looping { false };
 };
 
 } // namespace griddy

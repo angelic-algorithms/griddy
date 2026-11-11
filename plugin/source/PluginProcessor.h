@@ -2,6 +2,7 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 
+#include "engine/EngineHost.h"
 #include "engine/VideoEngine.h"
 
 namespace griddy
@@ -53,6 +54,7 @@ public:
 
     juce::AudioProcessorValueTreeState& getParameters() noexcept { return parameters; }
     VideoEngine& getEngine() noexcept { return *engine; }
+    EngineHost& getHost() noexcept { return *host; }
     TransportSnapshot getTransport() const noexcept { return transport.read(); }
 
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
@@ -61,6 +63,7 @@ private:
     juce::AudioProcessorValueTreeState parameters;
     TransportState transport;
     std::unique_ptr<VideoEngine> engine;
+    std::unique_ptr<EngineHost> host;
     int64_t blockCounter = 0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (GriddyProcessor)

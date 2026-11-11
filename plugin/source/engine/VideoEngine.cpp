@@ -133,6 +133,20 @@ juce::var VideoEngine::getStatus() const
     return juce::var (obj.release());
 }
 
+std::shared_ptr<const VideoFrame> VideoEngine::latestFrame (int slot) const
+{
+    if (! juce::isPositiveAndBelow (slot, maxSlots))
+        return nullptr;
+
+    juce::String id;
+    {
+        const std::scoped_lock sl (slotLock);
+        id = slotSources[(size_t) slot];
+    }
+
+    return id.isNotEmpty() ? frameStore.latest (id) : nullptr;
+}
+
 juce::MemoryBlock VideoEngine::getPreviewJpeg() const
 {
     const std::scoped_lock sl (previewLock);
@@ -176,6 +190,9 @@ void VideoEngine::renderOneFrame (double now)
 {
     const auto t = transport.read();
     beatClock.update (t, now);
+
+    if (! composeEnabled.load())
+        return;
 
     const auto slots = juce::jlimit (1, maxSlots, readChoice (controls.numSlots, 4));
 

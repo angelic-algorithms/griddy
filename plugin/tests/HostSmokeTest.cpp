@@ -29,6 +29,7 @@ void check (bool ok, const String& what)
 struct FakePlayHead final : AudioPlayHead
 {
     double ppq = 8.0; // bar 3 in 4/4
+    int64_t samples = 0;
     bool playing = true, recording = true;
 
     Optional<PositionInfo> getPosition() const override
@@ -40,6 +41,7 @@ struct FakePlayHead final : AudioPlayHead
         info.setTimeSignature (TimeSignature { 4, 4 });
         info.setIsPlaying (playing);
         info.setIsRecording (recording);
+        info.setTimeInSamples (samples);
         return info;
     }
 };
@@ -60,8 +62,9 @@ std::unique_ptr<AudioPluginInstance> load (AudioPluginFormatManager& fm, const P
 }
 
 /** Runs the audio callback for `seconds` of audio at 48 kHz, advancing the fake transport. */
-void runAudio (AudioPluginInstance& p, FakePlayHead& head, double seconds)
+void runAudio (AudioPluginInstance& p, FakePlayHead& head, double seconds, bool noise = false)
 {
+    Random rng (7);
     AudioBuffer<float> buffer (2, 512);
     MidiBuffer midi;
     const auto blocks = (int) (seconds * 48000.0 / 512.0);
@@ -69,9 +72,16 @@ void runAudio (AudioPluginInstance& p, FakePlayHead& head, double seconds)
     for (int i = 0; i < blocks; ++i)
     {
         buffer.clear();
-        buffer.setSample (0, 0, 0.5f);
+        if (noise)
+            for (int ch = 0; ch < 2; ++ch)
+                for (int n = 0; n < 512; ++n)
+                    buffer.setSample (ch, n, 0.3f * (rng.nextFloat() * 2.0f - 1.0f));
+        else
+            buffer.setSample (0, 0, 0.5f);
+
         p.processBlock (buffer, midi);
         head.ppq += 512.0 / 48000.0 * (100.0 / 60.0);
+        head.samples += 512;
 
         // Real time pacing, so the 30 fps video engine sees the transport move.
         if (i % 4 == 0)
@@ -79,7 +89,8 @@ void runAudio (AudioPluginInstance& p, FakePlayHead& head, double seconds)
     }
 
     // Audio should pass through untouched.
-    check (std::abs (buffer.getSample (0, 0) - 0.5f) < 1.0e-6f, "audio passes through");
+    if (! noise)
+        check (std::abs (buffer.getSample (0, 0) - 0.5f) < 1.0e-6f, "audio passes through");
 }
 } // namespace
 
@@ -133,6 +144,40 @@ int main (int argc, char** argv)
         runAudio (*plugin, head, 2.0);
         head.playing = head.recording = false;
         runAudio (*plugin, head, 0.5);
+
+        // Record a take: arm, play with the DAW recording for a few seconds, then stop.
+        for (auto* param : plugin->getParameters())
+            if (param->getName (64) == "Record arm")
+                param->setValueNotifyingHost (1.0f);
+
+        head.playing = head.recording = true;
+        runAudio (*plugin, head, 4.0, true);
+        head.playing = head.recording = false;
+        runAudio (*plugin, head, 0.5);
+        pumpMessages (5000); // the take is finished and analysed on worker threads
+
+        {
+            // The default output folder; the VST3 wrapper hides the plugin's own state, so look on disk.
+            const auto sessions = File::getSpecialLocation (File::userMoviesDirectory).getChildFile ("Griddy").getChildFile ("Sessions");
+            check (sessions.isDirectory(), "the plugin made a sessions folder");
+            const auto slotFolder = sessions;
+            Array<File> takes;
+            slotFolder.findChildFiles (takes, File::findDirectories, true, "*.gtake");
+            check (takes.size() == 1, "one take was recorded (" + String (takes.size()) + " found)");
+
+            if (takes.size() == 1)
+            {
+                const auto meta = JSON::parse (takes[0].getChildFile ("take.json"));
+                const auto state = meta.getProperty ("state", {}).toString();
+                const auto frames = meta.getProperty ("frameTimes", {}).getArray() != nullptr ? meta.getProperty ("frameTimes", {}).getArray()->size() : 0;
+                const auto seconds = (double) meta.getProperty ("durationSeconds", 0.0);
+                std::cout << "  take: state " << state << ", " << frames << " frames, " << seconds << " s" << std::endl;
+                check (state == "review", "the take is waiting for review");
+                check (seconds > 3.5 && seconds < 4.6, "the reference audio is about as long as the recording");
+                check (frames > 90 && frames < 150, "the camera frames were recorded at about 30 fps");
+                check (takes[0].getChildFile ("audio.wav").existsAsFile(), "the take has its reference audio");
+            }
+        }
 
         // Editor: create the WebView UI, let it load, then tear it down.
         {

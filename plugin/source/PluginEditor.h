@@ -38,10 +38,12 @@ private:
 
     static juce::var devicesToVar (const std::vector<CaptureDeviceInfo>&);
     juce::var slotsToVar() const;
+    juce::var statusToVar() const;
     juce::var transportToVar() const;
 
     GriddyProcessor& processor;
     VideoEngine& engine;
+    EngineHost& host;
 
     juce::WebSliderRelay numSlotsRelay { ParamIDs::numSlots };
     juce::WebToggleButtonRelay recordArmRelay { ParamIDs::recordArm };

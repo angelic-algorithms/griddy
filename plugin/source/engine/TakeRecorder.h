@@ -81,6 +81,7 @@ private:
     std::atomic<bool> recording { false };
     std::atomic<bool> stopRequested { false };
     std::atomic<uint64_t> written { 0 }, droppedFrames { 0 };
+    std::atomic<int64_t> firstHost { -1 };   // host sample of the first block actually fed (the audio thread may start late)
     std::unique_ptr<Writer> writer;
     std::unique_ptr<juce::Thread> movExport;
     juce::String movError;

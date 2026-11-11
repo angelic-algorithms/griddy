@@ -110,6 +110,15 @@ public:
         drainFrames (true);
         wav.close();
 
+        // Recording is started from a control thread, so the first block fed may come after the one that asked for it.
+        // The audio file begins at the first block that was really written.
+        if (const auto first = owner.firstHost.load(); first >= 0 && first != owner.entry.meta.startHostSample)
+        {
+            auto& m = owner.entry.meta;
+            m.startPpq += (double) (first - m.startHostSample) / m.sampleRate * m.bpm / 60.0;
+            m.startHostSample = first;
+        }
+
         // Map camera capture times onto the host timeline. The audio thread stamped every block
         // with (wall clock, host sample), so a straight line fit through them gives the host time
         // of any wall clock moment with the block to block jitter averaged out.
@@ -233,6 +242,7 @@ bool TakeRecorder::start (int slot, TakeMeta initial, const Config& cfg)
         frames.clear();
     }
 
+    firstHost = -1;
     stopRequested = false;
     written = 0;
     droppedFrames = 0;
@@ -246,6 +256,8 @@ void TakeRecorder::feedAudio (const float* mono, int numSamples, int64_t hostSam
     if (! recording.load (std::memory_order_relaxed))
         return;
 
+    auto none = int64_t (-1);
+    firstHost.compare_exchange_strong (none, hostSample, std::memory_order_relaxed);
     audioRing.write (mono, (size_t) numSamples);
     Stamp s { steadyNowSeconds(), hostSample };
     stampRing.write (&s, 1);

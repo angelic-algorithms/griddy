@@ -17,6 +17,7 @@ GriddyEditor::GriddyEditor (GriddyProcessor& p)
     : AudioProcessorEditor (&p),
       processor (p),
       engine (p.getEngine()),
+      host (p.getHost()),
       browser (std::make_unique<juce::WebBrowserComponent> (makeBrowserOptions())),
       numSlotsAttachment (param (p, ParamIDs::numSlots), numSlotsRelay, nullptr),
       recordArmAttachment (param (p, ParamIDs::recordArm), recordArmRelay, nullptr),
@@ -79,7 +80,28 @@ juce::WebBrowserComponent::Options GriddyEditor::makeBrowserOptions()
         })
         .withNativeFunction ("getStatus", [this] (const juce::Array<juce::var>&, auto complete)
         {
-            complete (engine.getStatus());
+            complete (statusToVar());
+        })
+        .withNativeFunction ("setTargetSlot", [this] (const juce::Array<juce::var>& args, auto complete)
+        {
+            host.setTargetSlot (args.size() > 0 ? (int) args[0] : 0);
+            complete (host.getTargetSlot());
+        })
+        .withNativeFunction ("keepTake", [this] (const juce::Array<juce::var>& args, auto complete)
+        {
+            complete (args.size() > 1 && host.keepTake ((int) args[0], (int) args[1]));
+        })
+        .withNativeFunction ("retakeTake", [this] (const juce::Array<juce::var>& args, auto complete)
+        {
+            complete (args.size() > 1 && host.retakeTake ((int) args[0], (int) args[1]));
+        })
+        .withNativeFunction ("restoreTake", [this] (const juce::Array<juce::var>& args, auto complete)
+        {
+            complete (args.size() > 1 && host.restoreTake ((int) args[0], (int) args[1]));
+        })
+        .withNativeFunction ("setSlip", [this] (const juce::Array<juce::var>& args, auto complete)
+        {
+            complete (args.size() > 2 && host.setSlip ((int) args[0], (int) args[1], (double) args[2]));
         })
         .withNativeFunction ("revealOutputFolder", [this] (const juce::Array<juce::var>&, auto complete)
         {
@@ -116,7 +138,7 @@ std::optional<juce::WebBrowserComponent::Resource> GriddyEditor::getResource (co
 {
     if (url.startsWith ("/preview.jpg"))
     {
-        const auto jpeg = engine.getPreviewJpeg();
+        const auto jpeg = host.getPreviewJpeg();
 
         if (jpeg.isEmpty())
             return std::nullopt;
@@ -133,14 +155,14 @@ void GriddyEditor::timerCallback()
 {
     browser->emitEventIfBrowserIsVisible ("transport", transportToVar());
 
-    if (const auto serial = engine.getPreviewSerial(); serial != lastPreviewSerial)
+    if (const auto serial = host.getPreviewSerial(); serial != lastPreviewSerial)
     {
         lastPreviewSerial = serial;
         browser->emitEventIfBrowserIsVisible ("preview", (juce::int64) serial);
     }
 
     if ((ticks++ % 15) == 0)
-        browser->emitEventIfBrowserIsVisible ("status", engine.getStatus());
+        browser->emitEventIfBrowserIsVisible ("status", statusToVar());
 }
 
 juce::var GriddyEditor::devicesToVar (const std::vector<CaptureDeviceInfo>& devices)
@@ -157,6 +179,16 @@ juce::var GriddyEditor::devicesToVar (const std::vector<CaptureDeviceInfo>& devi
     }
 
     return list;
+}
+
+juce::var GriddyEditor::statusToVar() const
+{
+    auto status = engine.getStatus();
+
+    if (auto* obj = status.getDynamicObject())
+        obj->setProperty ("engine", host.getStatus());
+
+    return status;
 }
 
 juce::var GriddyEditor::slotsToVar() const

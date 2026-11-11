@@ -120,6 +120,7 @@ target_sources(Griddy PRIVATE
     source/UiResources.cpp
     ${GRIDDY_CORE_SOURCES}
     source/engine/VideoEngine.cpp
+    source/engine/EngineHost.cpp
     source/capture/TestPatternSource.cpp
     source/capture/CaptureDevices.cpp)
 
