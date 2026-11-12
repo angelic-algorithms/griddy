@@ -125,3 +125,8 @@ Max for Live files, ARA2, final UI wiring for every control, Windows capture, th
 - Compositors: CPU reference and an OpenGL path. The GPU path matches the CPU picture but is only measured on software renderers, so CPU stays the default.
 - Embedded sync runs at 800 baud (48 bit frame, about 60 ms). Fingerprint matching resets on host audio discontinuities.
 - The engine is not yet wired into the plugin processor and editor. The plugin still uses the earlier camera code.
+- Every finished take.mov is also copied to `<takes folder>/Takes/Slot N Take M.mov`, one flat folder for Finder. Take numbers count per session, so a repeated name gets a " (2)" suffix instead of overwriting.
+- Record when: DAW plays and Armed record on every play while armed, so a take there is one shot. When it ends the hub switches Record arm off, and nothing records until arm is switched on again. Before this, pressing play again recorded a new take, which showed the live camera instead of the take and deleted the take still in review. DAW records keeps recording on every DAW record pass, as the DAW's own record button is the gate.
+- A takes folder chosen while a take or export runs is kept as pending and applied as soon as they end. Before, the UI showed the new folder while takes kept going to the old one.
+- Saved state carries `stateVersion` (now 2). A state without it that has Record when on DAW records is loaded as DAW plays, once. Saving again keeps whatever is chosen.
+- `GRIDDY_TAKES_FOLDER` overrides the default takes folder. The host smoke test uses it so it never deletes real takes in `~/Movies/Griddy`.

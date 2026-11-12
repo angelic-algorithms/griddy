@@ -34,7 +34,7 @@ The ideas, from first principles:
 | --- | --- |
 | Cameras (slots) | 1 to 9 |
 | Record arm | on, off |
-| Record when | DAW records, DAW plays, Armed |
+| Record when | DAW records, DAW plays (default), Armed. In DAW plays and Armed a take is one shot: arm switches off when it ends |
 
 Which camera sits in which slot and the takes folder are saved with your DAW project.
 
