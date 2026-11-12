@@ -144,7 +144,7 @@ struct Recorded
     int32_t id() const { return entry.meta.takeId; }
 };
 
-Recorded recordTake (PlaybackEngine& eng, int slot, double seconds, const std::vector<float>& performance, double hostStartSeconds, bool embed = false, bool wantMov = false)
+Recorded recordTake (PlaybackEngine& eng, int slot, double seconds, const std::vector<float>& performance, double hostStartSeconds, bool embed = false, bool wantMov = false, double loopSeconds = 0.0)
 {
     TakeRecorder rec (eng.history());
     TakeRecorder::Config cfg;
@@ -174,7 +174,11 @@ Recorded recordTake (PlaybackEngine& eng, int slot, double seconds, const std::v
     for (int i = 0; i < blocks; ++i)
     {
         sleepUntil (t0 + (double) i * BLK / SR);
-        rec.feedAudio (performance.data() + (size_t) i * BLK, BLK, meta.startHostSample + (int64_t) i * BLK);
+        // A looping DAW sends the host position back to the loop start at every wrap.
+        auto offset = (int64_t) i * BLK;
+        if (loopSeconds > 0.0)
+            offset %= (int64_t) (loopSeconds * SR);
+        rec.feedAudio (performance.data() + (size_t) i * BLK, BLK, meta.startHostSample + offset);
     }
 
     cam.stopThread (2000);
@@ -760,6 +764,33 @@ void silentPlayback()
     const auto sought = errStats (s, 7.7, 9.4);
     report ("silent track, after a seek", sought);
     check (sought.badFraction < 0.05 && sought.p99 < 80.0, "silent track: follows a seek");
+    finish (*w);
+}
+
+// The DAW loops a 2 second region while a 7 second take records (what Live does with the loop switch on).
+// Frame times must follow the take audio, which runs straight on, not the host position, which jumps back.
+void loopRecord()
+{
+    auto w = makeWorld (1);
+    auto& A = w->add (recordTake (*w->engine, 0, 7.0, performance (51, 7.0), 10.0, false, false, 2.0));
+    const auto& ft = A.entry.meta.frameTimes;
+
+    bool rising = ft.size() > 10;
+    for (size_t i = 1; i < ft.size(); ++i)
+        rising = rising && ft[i] > ft[i - 1];
+    check (rising, "frame times only go forward through the loop wraps");
+    check (! ft.empty() && ft.front() > -0.2 && ft.front() < 0.2, "first frame near the start of the take (" + juce::String (ft.empty() ? 0.0 : ft.front(), 3) + " s)");
+    check (! ft.empty() && std::abs (ft.back() - A.entry.meta.durationSeconds) < 0.3,
+           "last frame near the end of the take (" + juce::String (ft.empty() ? 0.0 : ft.back(), 2) + " of " + juce::String (A.entry.meta.durationSeconds, 2) + " s)");
+
+    // Played back from where it was recorded, without the loop, the picture moves with the audio.
+    w->engine->reloadSlot (0);
+    Timeline tl (1);
+    tl.clips[0].push_back (Clip::place (A, 10.0, 0.0, 7.0));
+    const auto s = observe (*w, tl, { { Event::seek, 0.0, 10.0 }, { Event::play, 0.0 } }, 10.0, 6.5, 0);
+    const auto st = errStats (s, 0.4, 6.3);
+    report ("take recorded through loop wraps", st);
+    check (st.badFraction == 0.0 && st.p99 < 60.0, "a take recorded while looping plays in sync");
     finish (*w);
 }
 
@@ -1559,6 +1590,7 @@ int main (int argc, char** argv)
         { "second_take", recordSecondTake, true },
         { "retake", retakeDiscards, true },
         { "silent_playback", silentPlayback, true },
+        { "loop_record", loopRecord, true },
         { "duplicate_x8", duplicateEight, true },
         { "trimmed", trimmedClip, true },
         { "split_moved", splitAndMoved, true },

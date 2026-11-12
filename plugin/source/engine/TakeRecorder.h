@@ -69,7 +69,7 @@ public:
 
 private:
     struct Pending { juce::Image image; double captureWall; double arrivalWall; };
-    struct Stamp { double wall; int64_t hostSample; };
+    struct Stamp { double wall; int64_t hostSample; int32_t numSamples; };
 
     class Writer;
 

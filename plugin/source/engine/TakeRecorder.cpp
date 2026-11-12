@@ -31,7 +31,8 @@ public:
 
         std::vector<float> chunk (8192);
         std::vector<float> allAudioForEnvelope;
-        std::vector<double> stampWall, stampHost;
+        std::vector<double> stampWall, stampTake;
+        int64_t stampedSamples = 0;
         std::vector<double> frameWall, deliveryDelays;
         int frameIndex = 0;
 
@@ -54,7 +55,8 @@ public:
             while (owner.stampRing.read (&s, 1) == 1)
             {
                 stampWall.push_back (s.wall);
-                stampHost.push_back ((double) s.hostSample / owner.entry.meta.sampleRate);
+                stampTake.push_back ((double) stampedSamples / owner.entry.meta.sampleRate);
+                stampedSamples += s.numSamples;
             }
         };
 
@@ -119,40 +121,42 @@ public:
             m.startHostSample = first;
         }
 
-        // Map camera capture times onto the host timeline. The audio thread stamped every block
-        // with (wall clock, host sample), so a straight line fit through them gives the host time
-        // of any wall clock moment with the block to block jitter averaged out.
+        // Map camera capture times onto the take's own audio. The audio thread stamped every block with
+        // the wall clock, and the blocks are the take audio in order, so a straight line fit through
+        // (wall clock, seconds into the take audio) gives the take time of any frame with the block to
+        // block jitter averaged out. The host position is not used: when the DAW loops while recording,
+        // it jumps back at every wrap, but the take audio and the frames keep running forward.
         auto& meta = owner.entry.meta;
-        double a = 0.0, b = 1.0;
+        meta.frameTimes.clear();
+
         if (stampWall.size() >= 2)
         {
             const auto n = (double) stampWall.size();
-            double sw = 0, sh = 0, sww = 0, swh = 0;
+            double sw = 0, st = 0, sww = 0, swt = 0;
             const auto w0 = stampWall.front();
 
             for (size_t i = 0; i < stampWall.size(); ++i)
             {
                 const auto w = stampWall[i] - w0;
-                sw += w; sh += stampHost[i]; sww += w * w; swh += w * stampHost[i];
+                sw += w; st += stampTake[i]; sww += w * w; swt += w * stampTake[i];
             }
 
             const auto den = n * sww - sw * sw;
-            b = den > 1.0e-12 ? (n * swh - sw * sh) / den : 1.0;
-            a = (sh - b * sw) / n - b * 0.0;
-            // host = a + b * (wall - w0)
-            for (auto& w : frameWall)
-                w = a + b * (w - w0);
-        }
-        else if (! frameWall.empty())
-        {
-            for (auto& w : frameWall)
-                w = 0.0;
-        }
+            auto b = den > 1.0e-12 ? (n * swt - sw * st) / den : 1.0;
 
-        const auto startHostSeconds = meta.hostStartSeconds();
-        meta.frameTimes.clear();
-        for (auto hw : frameWall)
-            meta.frameTimes.push_back (hw - startHostSeconds);
+            // Audio runs in real time, so anything far from 1 is a broken fit (a stall, a dropout): use real time.
+            if (b < 0.9 || b > 1.1)
+                b = 1.0;
+
+            const auto a = (st - b * sw) / n;
+            for (auto w : frameWall)
+                meta.frameTimes.push_back (a + b * (w - w0));
+        }
+        else
+        {
+            for (size_t i = 0; i < frameWall.size(); ++i)
+                meta.frameTimes.push_back ((double) i / cfg.fps);
+        }
 
         std::sort (deliveryDelays.begin(), deliveryDelays.end());
         meta.deliveryDelaySeconds = deliveryDelays.empty() ? 0.0 : deliveryDelays[deliveryDelays.size() / 2];
@@ -278,7 +282,7 @@ void TakeRecorder::feedAudio (const float* mono, int numSamples, int64_t hostSam
     auto none = int64_t (-1);
     firstHost.compare_exchange_strong (none, hostSample, std::memory_order_relaxed);
     audioRing.write (mono, (size_t) numSamples);
-    Stamp s { steadyNowSeconds(), hostSample };
+    Stamp s { steadyNowSeconds(), hostSample, (int32_t) numSamples };
     stampRing.write (&s, 1);
 }
 
