@@ -156,6 +156,7 @@ private:
     void controlTick();
     void settleSlots();
     void disarmLater (Member* member);
+    void purgeLater();
     void logTransport (Member& m);
     void log (const juce::String& line);
     bool applyOutputFolder (const juce::File& folder);
@@ -205,6 +206,7 @@ private:
     juce::String exportError;    // guarded by statusLock
 
     juce::ThreadPool worker { 1 };
+    juce::ThreadPool cleaner { 1 }; // deletes discarded takes, so a big delete never holds up the next take
 
     Compositor compositor;
     juce::Image output { juce::Image::ARGB, 1280, 720, true, juce::SoftwareImageType() };

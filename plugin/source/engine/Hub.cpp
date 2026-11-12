@@ -39,6 +39,7 @@ Hub::~Hub()
     stopThread (5000);
     audioExporter = nullptr;
     worker.removeAllJobs (true, 60000);
+    cleaner.removeAllJobs (true, 60000);
     destroyEngine();
 }
 
@@ -274,6 +275,8 @@ void Hub::buildEngine()
             if (! e2->history().playable (s).empty())
                 e2->reloadSlot (s);
         }
+
+        purgeLater(); // anything discarded before the DAW closed last time
     });
 }
 
@@ -525,6 +528,19 @@ void Hub::logTransport (Member& m)
     l.stuck = sample == l.sample;
     l.sample = sample;
     l.wall = now;
+}
+
+void Hub::purgeLater()
+{
+    juce::File root;
+    {
+        const std::scoped_lock sl (engineLock);
+        if (engine == nullptr)
+            return;
+        root = engine->history().root();
+    }
+
+    cleaner.addJob ([root] { TakeHistory::purgeDiscarded (root); });
 }
 
 void Hub::disarmLater (Member* member)
@@ -779,8 +795,11 @@ void Hub::finishTake (int slot)
         return;
     }
 
+    const auto t0 = juce::Time::getMillisecondCounterHiRes();
+
     if (const auto entry = r->stop())
     {
+        const auto t1 = juce::Time::getMillisecondCounterHiRes();
         const auto& ft = entry->meta.frameTimes;
         log ("slot " + juce::String (slot + 1) + ": take " + juce::String (entry->meta.takeId) + " ends, "
              + juce::String (entry->meta.durationSeconds, 2) + " s of audio, " + juce::String (entry->meta.numFrames) + " frames from "
@@ -790,6 +809,10 @@ void Hub::finishTake (int slot)
         droppedAudio[(size_t) slot] += r->audioDropped();
         slotRecording[(size_t) slot] = false;
         e->reloadSlot (slot);
+        log ("slot " + juce::String (slot + 1) + ": take " + juce::String (entry->meta.takeId) + " playable "
+             + juce::String ((juce::Time::getMillisecondCounterHiRes() - t0) / 1000.0, 2) + " s after the stop was handled (finishing "
+             + juce::String ((t1 - t0) / 1000.0, 2) + " s, loading " + juce::String ((juce::Time::getMillisecondCounterHiRes() - t1) / 1000.0, 2) + " s)");
+        purgeLater();
     }
     else
     {
@@ -1107,7 +1130,10 @@ void Hub::reloadLater (int slot)
         }
 
         if (e != nullptr)
+        {
             e->reloadSlot (slot);
+            purgeLater();
+        }
     });
 }
 

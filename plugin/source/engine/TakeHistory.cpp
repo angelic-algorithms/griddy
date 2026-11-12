@@ -73,9 +73,7 @@ bool TakeHistory::finishTake (const Entry& finished)
     for (auto& other : scan (finished.meta.slot))
     {
         if (other.meta.takeId != finished.meta.takeId && other.meta.state == TakeMeta::State::review)
-        {
-            other.folder.deleteRecursively();
-        }
+            discard (other);
     }
 
     Entry e = finished;
@@ -122,7 +120,7 @@ bool TakeHistory::retake (int slot, int32_t takeId)
         if (e.meta.takeId == takeId && e.meta.state == TakeMeta::State::review)
         {
             // The discarded take was never kept, so its media goes. The old active take is untouched.
-            return e.folder.deleteRecursively();
+            return discard (e);
         }
     }
 
@@ -141,6 +139,20 @@ bool TakeHistory::setSlip (int slot, int32_t takeId, double slipSeconds)
         }
 
     return false;
+}
+
+bool TakeHistory::discard (const Entry& e)
+{
+    // Out of the way at once: scan() only lists *.gtake folders. purgeDiscarded() deletes it later.
+    const auto target = e.folder.getSiblingFile (juce::String (e.meta.takeId) + ".discarded").getNonexistentSibling (false);
+    return e.folder.moveFileTo (target) || e.folder.deleteRecursively();
+}
+
+void TakeHistory::purgeDiscarded (const juce::File& rootFolder)
+{
+    for (const auto& slot : rootFolder.findChildFiles (juce::File::findDirectories, false, "slot*"))
+        for (const auto& dir : slot.findChildFiles (juce::File::findDirectories, false, "*.discarded"))
+            dir.deleteRecursively();
 }
 
 std::optional<TakeHistory::Entry> TakeHistory::active (int slot) const

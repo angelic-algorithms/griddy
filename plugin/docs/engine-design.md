@@ -133,4 +133,5 @@ Max for Live files, ARA2, final UI wiring for every control, Windows capture, th
 - Camera frames are stamped with `steadyNowSeconds()`, the clock the recorder stamps audio blocks with. They used JUCE's millisecond counter, which stops while the Mac sleeps, so on a Mac that had slept the frames landed days away from the audio.
 - Frame times are fitted against the take's own audio (seconds of audio written), not the host position. With the DAW looping while recording, the host position jumps back at every wrap and the old fit squeezed every frame into one moment, which played back as a frozen picture.
 - `<takes folder>/Logs/griddy.log` records what the DAW sends (play, stop, record flag, loop, arm, record when, position jumps or a position that does not move while playing) and every take start and end with its frame times.
+- A discarded take (replaced while in review, or Retake) is renamed to `<id>.discarded` at once and deleted later on its own thread, after the new take is loaded. Deleting a long take's frame files inline held up the next take by 20 to 40 seconds.
 

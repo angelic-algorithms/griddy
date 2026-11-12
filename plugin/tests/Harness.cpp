@@ -140,6 +140,7 @@ struct Recorded
     std::vector<float> audio; // what the DAW would have on its clip
     bool movOk = false;
     juce::File flat; // the plainly named copy of take.mov, when one was asked for
+    double stopSeconds = 0.0; // how long TakeRecorder::stop() took
     int label() const { return entry.meta.takeId & 0xff; }
     int32_t id() const { return entry.meta.takeId; }
 };
@@ -183,7 +184,9 @@ Recorded recordTake (PlaybackEngine& eng, int slot, double seconds, const std::v
 
     cam.stopThread (2000);
     Recorded r;
+    const auto stopStart = steadyNowSeconds();
     r.entry = *rec.stop();
+    r.stopSeconds = steadyNowSeconds() - stopStart;
     r.movOk = wantMov && rec.waitForMovExport();
     r.flat = rec.flatCopy();
     if (wantMov && ! r.movOk)
@@ -791,6 +794,34 @@ void loopRecord()
     const auto st = errStats (s, 0.4, 6.3);
     report ("take recorded through loop wraps", st);
     check (st.badFraction == 0.0 && st.p99 < 60.0, "a take recorded while looping plays in sync");
+    finish (*w);
+}
+
+// A new take replaces a take still in review. The old one may be huge (a long take is tens of thousands
+// of frame files); throwing it away must not delay the new take becoming playable.
+void replaceBigReview()
+{
+    auto w = makeWorld (1);
+    auto& old = w->add (recordTake (*w->engine, 0, 2.0, performance (61, 2.0), 10.0));
+
+    // Bulk it up like a half hour take: 30000 more frame files.
+    const juce::MemoryBlock junk (2048, true);
+    for (int i = 0; i < 30000; ++i)
+        old.entry.folder.getChildFile ("frames").getChildFile (juce::String::formatted ("x%06d.jpg", i)).replaceWithData (junk.getData(), junk.getSize());
+
+    auto& next = w->add (recordTake (*w->engine, 0, 3.0, performance (62, 3.0), 10.0));
+    metric ("stop with a big take to discard", next.stopSeconds * 1000.0, "ms");
+    check (next.stopSeconds < 0.5, "a new take finishes at once even when a big review take is replaced (" + juce::String (next.stopSeconds, 3) + " s)");
+    check (! old.entry.folder.exists(), "the replaced take is out of the history at once");
+
+    const auto t0 = steadyNowSeconds();
+    w->engine->reloadSlot (0);
+    const auto reload = steadyNowSeconds() - t0;
+    metric ("reload after a take", reload * 1000.0, "ms");
+    check (reload < 0.5, "the new take loads for playback in " + juce::String (reload, 3) + " s");
+
+    TakeHistory::purgeDiscarded (w->engine->history().root());
+    check (w->engine->history().slotFolder (0).findChildFiles (juce::File::findDirectories, false, "*.discarded").isEmpty(), "purging deletes the discarded media");
     finish (*w);
 }
 
@@ -1591,6 +1622,7 @@ int main (int argc, char** argv)
         { "retake", retakeDiscards, true },
         { "silent_playback", silentPlayback, true },
         { "loop_record", loopRecord, true },
+        { "replace_big_review", replaceBigReview, true },
         { "duplicate_x8", duplicateEight, true },
         { "trimmed", trimmedClip, true },
         { "split_moved", splitAndMoved, true },

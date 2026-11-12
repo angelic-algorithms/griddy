@@ -45,6 +45,11 @@ public:
 
     bool keep (int slot, int32_t takeId);
     bool retake (int slot, int32_t takeId);
+
+    /** Deletes the media of discarded takes. finishTake() and retake() only rename a discarded take's folder,
+        which is instant, because deleting tens of thousands of frame files can take many seconds.
+        Call this off the path that makes a new take playable. */
+    static void purgeDiscarded (const juce::File& rootFolder);
     bool restore (int slot, int32_t takeId);
     bool setSlip (int slot, int32_t takeId, double slipSeconds);
 
@@ -66,6 +71,7 @@ public:
 private:
     std::vector<Entry> scan (int slot) const;
     bool save (const Entry& e) const;
+    static bool discard (const Entry& e);
     int32_t nextTakeId();
 
     juce::File rootFolder;
