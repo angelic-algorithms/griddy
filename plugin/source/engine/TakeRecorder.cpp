@@ -185,7 +185,8 @@ namespace
 class MovExportThread final : public juce::Thread
 {
 public:
-    MovExportThread (TakeMeta m, juce::File f) : juce::Thread ("take.mov export"), meta (std::move (m)), folder (std::move (f)) {}
+    MovExportThread (TakeMeta m, juce::File f, juce::File flat)
+        : juce::Thread ("take.mov export"), meta (std::move (m)), folder (std::move (f)), flatFolder (std::move (flat)) {}
 
     void run() override
     {
@@ -193,10 +194,23 @@ public:
         juce::String error;
         ok = exportTakeMov (meta, folder, folder.getChildFile ("take.mov"), error);
         message = error;
+
+        // A plain copy in one flat folder, so takes can be found in Finder without the session folders.
+        // Two slots can finish at once; whichever creates the folder second gets an error but finds it there.
+        if (ok && flatFolder != juce::File())
+            flatFolder.createDirectory();
+
+        if (ok && flatFolder.isDirectory())
+        {
+            const auto name = "Slot " + juce::String (meta.slot + 1) + " Take " + juce::String (meta.takeId) + ".mov";
+            const auto target = flatFolder.getChildFile (name).getNonexistentSibling (true);
+            if (folder.getChildFile ("take.mov").copyFileTo (target))
+                copied = target;
+        }
     }
 
     TakeMeta meta;
-    juce::File folder;
+    juce::File folder, flatFolder, copied;
     bool ok = false, ran = false;
     juce::String message;
 };
@@ -217,6 +231,11 @@ bool TakeRecorder::waitForMovExport()
     else if (movError.isEmpty() && ! static_cast<MovExportThread&> (*movExport).ok)
         movError = "exporter returned false without a message";
     return static_cast<MovExportThread&> (*movExport).ok;
+}
+
+juce::File TakeRecorder::flatCopy() const
+{
+    return movExport != nullptr ? static_cast<MovExportThread&> (*movExport).copied : juce::File();
 }
 
 bool TakeRecorder::start (int slot, TakeMeta initial, const Config& cfg)
@@ -297,7 +316,7 @@ std::optional<TakeHistory::Entry> TakeRecorder::stop()
             movExport->stopThread (60000);
 
         // A copy of the final meta: the export must not read the entry while the UI edits it.
-        auto t = std::make_unique<MovExportThread> (entry.meta, entry.folder);
+        auto t = std::make_unique<MovExportThread> (entry.meta, entry.folder, config.flatFolder);
         const auto started = t->startThread (juce::Thread::Priority::normal);
         if (! started)
             t->run(); // no thread to be had: write it here rather than not at all

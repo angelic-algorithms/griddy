@@ -37,6 +37,7 @@ public:
         double audioLatencySeconds = 0.0;
         double fps = 30.0;
         bool exportMov = true;          // write take.mov after the take stops (needs FFmpeg)
+        juce::File flatFolder;          // if set, take.mov is also copied here as "Slot N Take M.mov"
     };
 
     explicit TakeRecorder (TakeHistory& history);
@@ -56,6 +57,9 @@ public:
     /** Blocks until the take.mov of the last stopped take is written (or failed). Returns true if it exists. */
     bool waitForMovExport();
     juce::String movExportError() const { return movError; }
+
+    /** The plainly named copy of the last take.mov, once written (empty when none). */
+    juce::File flatCopy() const;
 
     bool isRecording() const noexcept { return recording.load(); }
     int32_t currentTakeId() const noexcept { return entry.meta.takeId; }

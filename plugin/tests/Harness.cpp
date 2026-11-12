@@ -139,6 +139,7 @@ struct Recorded
     TakeHistory::Entry entry;
     std::vector<float> audio; // what the DAW would have on its clip
     bool movOk = false;
+    juce::File flat; // the plainly named copy of take.mov, when one was asked for
     int label() const { return entry.meta.takeId & 0xff; }
     int32_t id() const { return entry.meta.takeId; }
 };
@@ -149,6 +150,8 @@ Recorded recordTake (PlaybackEngine& eng, int slot, double seconds, const std::v
     TakeRecorder::Config cfg;
     cfg.embedSync = embed;
     cfg.exportMov = wantMov;
+    if (wantMov)
+        cfg.flatFolder = eng.history().slotFolder (slot).getParentDirectory().getChildFile ("Takes");
     if (! bigTakes)
     {
         cfg.width = 640; cfg.height = 360; cfg.proxyWidth = 320; cfg.proxyHeight = 180;
@@ -178,6 +181,7 @@ Recorded recordTake (PlaybackEngine& eng, int slot, double seconds, const std::v
     Recorded r;
     r.entry = *rec.stop();
     r.movOk = wantMov && rec.waitForMovExport();
+    r.flat = rec.flatCopy();
     if (wantMov && ! r.movOk)
         say ("  take.mov export failed: " + rec.movExportError());
     r.audio.assign (performance.begin(), performance.begin() + (long) blocks * BLK);
@@ -715,6 +719,47 @@ void retakeDiscards()
     const auto st = errStats (s, 0.5, 5.0);
     report ("after retake", st);
     check (st.badFraction == 0.0, "the kept take's video plays");
+    finish (*w);
+}
+
+// Record when "DAW plays": the DAW recorded no audio, so the track is silent on playback and only the
+// host position can place the video. It must still follow play, pause, loop and seek.
+void silentPlayback()
+{
+    auto w = makeWorld (1);
+    auto& A = w->add (recordTake (*w->engine, 0, 5.0, performance (41), 10.0));
+    w->engine->reloadSlot (0); // still in review, exactly as after a stop in the plugin
+
+    Timeline tl (1);
+    auto c = Clip::place (A, 10.0, 0.0, 5.0);
+    c.gain = 0.0f; // no audio on the track
+    tl.clips[0].push_back (c);
+
+    const auto s = observe (*w, tl,
+        { { Event::seek, 0.0, 10.0 }, { Event::play, 0.0 }, { Event::pause, 1.5 }, { Event::play, 2.5 },
+          { Event::loopOn, 4.0, 11.0, 13.0 }, { Event::seek, 7.5, 10.5 } }, 10.0, 9.5, 0);
+
+    const auto first = errStats (s, 0.3, 1.5);
+    report ("silent track, first play", first);
+    check (first.n > 0 && first.badFraction == 0.0 && first.p99 < 60.0, "silent track: the take plays from the host position");
+
+    std::set<int> counters;
+    for (const auto& x : s)
+        if (x.t > 1.7 && x.t < 2.4)
+            counters.insert (x.counter);
+    check (counters.size() == 1, "silent track: pause holds one frame (" + juce::String ((int) counters.size()) + " distinct)");
+
+    const auto resumed = errStats (s, 2.7, 4.0);
+    report ("silent track, after play again", resumed);
+    check (resumed.badFraction == 0.0 && resumed.p99 < 60.0, "silent track: play again resumes in sync");
+
+    const auto looped = errStats (s, 4.2, 7.4);
+    report ("silent track, through loop wraps", looped);
+    check (looped.badFraction < 0.05 && looped.p99 < 80.0, "silent track: follows the loop");
+
+    const auto sought = errStats (s, 7.7, 9.4);
+    report ("silent track, after a seek", sought);
+    check (sought.badFraction < 0.05 && sought.p99 < 80.0, "silent track: follows a seek");
     finish (*w);
 }
 
@@ -1338,6 +1383,12 @@ void movExport()
     check (mov.existsAsFile() && mov.getSize() > 10000, "take.mov is on disk (" + juce::String (mov.getSize() / 1024) + " KB)");
     metric ("take.mov size for 4 s", (double) mov.getSize() / 1024.0, "KB");
 
+    // The same file, plainly named, in one flat folder next to the session folders.
+    const auto flatName = "Slot 1 Take " + juce::String (A.id()) + ".mov";
+    check (A.flat.getFileName() == flatName && A.flat.getParentDirectory().getFileName() == "Takes",
+           "plain copy written as Takes/" + flatName + " (got " + A.flat.getFullPathName() + ")");
+    check (A.flat.getSize() == mov.getSize(), "the plain copy matches take.mov byte for byte in size");
+
     // Another program reads it: ffprobe sees one picture stream and one audio stream.
     const auto probeOut = A.entry.folder.getChildFile ("probe.txt");
     const auto cmd = "ffprobe -v error -show_entries stream=codec_name,codec_type,nb_frames,width,height,sample_rate -of csv=p=0 \"" + mov.getFullPathName() + "\" > \"" + probeOut.getFullPathName() + "\"";
@@ -1507,6 +1558,7 @@ int main (int argc, char** argv)
         { "tempo_change", tempoChange, true },
         { "second_take", recordSecondTake, true },
         { "retake", retakeDiscards, true },
+        { "silent_playback", silentPlayback, true },
         { "duplicate_x8", duplicateEight, true },
         { "trimmed", trimmedClip, true },
         { "split_moved", splitAndMoved, true },
