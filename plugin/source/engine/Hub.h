@@ -58,6 +58,15 @@ struct Member
     // Control thread -> audio thread. In DAW plays and Armed a take is one shot: once it ends, nothing
     // records until arm goes off and on again, so pressing play again plays the take instead of replacing it.
     std::atomic<bool> takeDone { false };
+
+    // Audio thread -> control thread, for the transport log.
+    std::atomic<int64_t> hostSample { 0 };
+    std::atomic<double> hostPpq { 0.0 };
+    std::atomic<bool> hostLooping { false };
+
+    // Control thread only: what the transport log last wrote for this instance.
+    struct Logged { bool valid = false, playing = false, recording = false, looping = false, armed = false; int mode = -1;
+                    int64_t sample = 0; double wall = 0.0; bool stuck = false; } logged;
     std::atomic<int64_t> requestSample { 0 };
     std::atomic<double> requestPpq { 0.0 }, requestBpm { 120.0 };
     std::atomic<int> requestNum { 4 }, requestDen { 4 };
@@ -147,6 +156,8 @@ private:
     void controlTick();
     void settleSlots();
     void disarmLater (Member* member);
+    void logTransport (Member& m);
+    void log (const juce::String& line);
     bool applyOutputFolder (const juce::File& folder);
     void buildEngine();
     void destroyEngine();
@@ -203,6 +214,8 @@ private:
     juce::MemoryBlock previewJpeg;
     std::atomic<int64_t> previewSerial { 0 };
     int tick = 0;
+    std::unique_ptr<juce::FileOutputStream> logFile; // control thread only
+    juce::File logFolder;
 
     mutable std::mutex statusLock;
     juce::String lastError;

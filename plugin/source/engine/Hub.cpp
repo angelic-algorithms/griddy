@@ -405,6 +405,9 @@ void Hub::processBlock (Member& member, const juce::AudioBuffer<float>& buffer, 
         member.requestDen = t.timeSigDenominator;
     }
 
+    member.hostSample.store (t.timeInSamples, std::memory_order_relaxed);
+    member.hostPpq.store (t.ppqPosition, std::memory_order_relaxed);
+    member.hostLooping.store (t.isLooping, std::memory_order_relaxed);
     member.wantRecording.store (want, std::memory_order_release);
     member.playing.store (t.isPlaying, std::memory_order_relaxed);
     member.hostRecording.store (t.isRecording, std::memory_order_relaxed);
@@ -461,6 +464,67 @@ void Hub::processBlock (Member& member, const juce::AudioBuffer<float>& buffer, 
 
         done += n;
     }
+}
+
+void Hub::log (const juce::String& line)
+{
+    // One file per takes folder, started fresh when it grows past 2 MB.
+    const auto folder = videoEngine.getOutputFolder().getChildFile ("Logs");
+    if (logFile == nullptr || folder != logFolder)
+    {
+        logFolder = folder;
+        folder.createDirectory();
+        const auto f = folder.getChildFile ("griddy.log");
+        if (f.getSize() > 2 * 1024 * 1024)
+            f.deleteFile();
+        logFile = std::make_unique<juce::FileOutputStream> (f);
+        if (! logFile->openedOk())
+        {
+            logFile.reset();
+            return;
+        }
+    }
+
+    logFile->writeText (juce::Time::getCurrentTime().formatted ("%Y-%m-%d %H:%M:%S ") + line + "\n", false, false, nullptr);
+    logFile->flush();
+}
+
+void Hub::logTransport (Member& m)
+{
+    // What the DAW really sends, written when it changes, so a session in the DAW can be read back afterwards.
+    auto& l = m.logged;
+    const auto playing = m.playing.load(), recording = m.hostRecording.load(), looping = m.hostLooping.load();
+    const auto armed = m.controls.recordArm != nullptr && m.controls.recordArm->load() > 0.5f;
+    const auto mode = readInt (m.controls.recordMode, 0);
+    const auto sample = m.hostSample.load();
+    const auto now = juce::Time::getMillisecondCounterHiRes() / 1000.0;
+    const auto who = "instance slot " + juce::String (m.slot.load() + 1) + ": ";
+    const auto where = " at sample " + juce::String (sample) + ", ppq " + juce::String (m.hostPpq.load(), 3);
+
+    if (! l.valid || playing != l.playing || recording != l.recording || looping != l.looping || armed != l.armed || mode != l.mode)
+    {
+        log (who + (playing ? "playing" : "stopped") + (recording ? ", DAW recording" : "") + (looping ? ", loop on" : "")
+             + (armed ? ", armed" : "") + ", record when " + juce::String (mode) + where);
+        l = { true, playing, recording, looping, armed, mode, sample, now, false };
+        return;
+    }
+
+    if (! playing)
+        return;
+
+    // While playing, the position should move about as fast as the clock. A jump back is a loop wrap or a seek.
+    const auto dt = now - l.wall;
+    if (dt < 0.5)
+        return;
+
+    if (sample < l.sample)
+        log (who + "position jumped back" + where);
+    else if (sample == l.sample && ! l.stuck)
+        log (who + "playing but the position is not moving" + where);
+
+    l.stuck = sample == l.sample;
+    l.sample = sample;
+    l.wall = now;
 }
 
 void Hub::disarmLater (Member* member)
@@ -527,6 +591,8 @@ void Hub::controlTick()
         for (auto& mp : members)
         {
             auto& m = *mp;
+            logTransport (m);
+
             const auto slot = m.slot.load();
             if (slot < 0)
                 continue;
@@ -558,6 +624,8 @@ void Hub::controlTick()
 
                 if (r->start (slot, meta, cfg))
                 {
+                    log ("slot " + juce::String (slot + 1) + ": take " + juce::String (r->currentTakeId()) + " starts at sample "
+                         + juce::String (meta.startHostSample) + " (record when " + juce::String (readInt (m.controls.recordMode, 0)) + ")");
                     m.recording = true;
                     m.lastCameraSerial = 0;
                     slotRecording[(size_t) slot] = true;
@@ -713,6 +781,11 @@ void Hub::finishTake (int slot)
 
     if (const auto entry = r->stop())
     {
+        const auto& ft = entry->meta.frameTimes;
+        log ("slot " + juce::String (slot + 1) + ": take " + juce::String (entry->meta.takeId) + " ends, "
+             + juce::String (entry->meta.durationSeconds, 2) + " s of audio, " + juce::String (entry->meta.numFrames) + " frames from "
+             + juce::String (ft.empty() ? 0.0 : ft.front(), 2) + " to " + juce::String (ft.empty() ? 0.0 : ft.back(), 2) + " s, "
+             + juce::String ((juce::int64) r->framesDropped()) + " dropped");
         droppedFrames[(size_t) slot] += r->framesDropped();
         droppedAudio[(size_t) slot] += r->audioDropped();
         slotRecording[(size_t) slot] = false;

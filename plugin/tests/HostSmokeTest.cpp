@@ -386,7 +386,8 @@ int main (int argc, char** argv)
         }
     }
 
-    root.deleteRecursively();
+    if (getenv ("GRIDDY_KEEP_SMOKE_FOLDER") == nullptr)
+        root.deleteRecursively();
 
     std::cout << (failures == 0 ? "HOST SMOKE TEST PASSED" : "HOST SMOKE TEST FAILED") << std::endl;
     return failures == 0 ? 0 : 1;
