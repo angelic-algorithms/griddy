@@ -5,6 +5,7 @@
 #include "engine/CollageLayout.h"
 #include "engine/Compositor.h"
 #include "engine/FrameStore.h"
+#include "engine/HostClock.h"
 #include "engine/TransportState.h"
 
 #include <set>
@@ -290,7 +291,12 @@ struct SourcesTests : juce::UnitTest
 
             expect (frame != nullptr, "no frame after 1 s");
             if (frame != nullptr)
+            {
                 expectEquals (frame->image.getWidth(), 160);
+
+                // Frames are stamped on the recorder's clock; another clock drifts by however long the Mac slept.
+                expect (std::abs (frame->captureTimeSeconds - griddy::steadyNowSeconds()) < 1.0, "capture time is on steadyNowSeconds()");
+            }
 
             src.stop();
             expect (store.latest (src.getId()) == nullptr, "stop() should clear its frame");

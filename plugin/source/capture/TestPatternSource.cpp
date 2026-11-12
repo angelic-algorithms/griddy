@@ -1,4 +1,5 @@
 #include "TestPatternSource.h"
+#include "../engine/HostClock.h"
 
 namespace griddy
 {
@@ -59,7 +60,7 @@ void TestPatternSource::run()
     while (! threadShouldExit())
     {
         const auto now = juce::Time::getMillisecondCounterHiRes() / 1000.0;
-        store.push (getId(), renderFrame (now - start), now);
+        store.push (getId(), renderFrame (now - start), steadyNowSeconds()); // the clock the recorder uses
 
         next += 1.0 / fps;
         const auto waitMs = (int) ((next - juce::Time::getMillisecondCounterHiRes() / 1000.0) * 1000.0);

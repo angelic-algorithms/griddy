@@ -11,7 +11,7 @@ namespace griddy
 struct VideoFrame
 {
     juce::Image image;               // ARGB software image
-    double captureTimeSeconds = 0.0; // monotonic clock, same one the engine uses
+    double captureTimeSeconds = 0.0; // steadyNowSeconds() at capture, the clock the recorder and engine use
     int64_t serial = 0;              // bumps per frame from this source
 };
 

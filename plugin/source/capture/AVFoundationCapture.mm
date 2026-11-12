@@ -3,6 +3,7 @@
 #import <CoreVideo/CoreVideo.h>
 
 #include "CaptureSource.h"
+#include "../engine/HostClock.h"
 
 #include <functional>
 
@@ -183,7 +184,9 @@ private:
 
         CVPixelBufferUnlockBaseAddress (pixels, kCVPixelBufferLock_ReadOnly);
 
-        store.push (sourceId, std::move (image), juce::Time::getMillisecondCounterHiRes() / 1000.0);
+        // The recorder times frames against audio blocks stamped with steadyNowSeconds(). Juce's millisecond
+        // counter stops while the Mac sleeps and steady_clock does not, so mixing them put frames days away.
+        store.push (sourceId, std::move (image), griddy::steadyNowSeconds());
     }
 
     AVCaptureDevice* device = nil;
