@@ -14,6 +14,11 @@ VideoEngine::VideoEngine (TransportState& t, EngineControls c)
     : juce::Thread ("Griddy video engine"), transport (t), controls (c)
 {
     outputFolder = juce::File::getSpecialLocation (juce::File::userMoviesDirectory).getChildFile ("Griddy");
+
+    // Tests point this elsewhere so they never touch real takes.
+    if (const auto testFolder = juce::SystemStats::getEnvironmentVariable ("GRIDDY_TAKES_FOLDER", {}); juce::File::isAbsolutePath (testFolder))
+        outputFolder = juce::File (testFolder);
+
     previewFormat.setQuality (0.7f);
     camerasAllowed = hostAllowsCameraAccess (cameraBlockedReason);
 }
