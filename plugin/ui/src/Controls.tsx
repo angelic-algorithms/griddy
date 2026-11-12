@@ -48,11 +48,17 @@ export function Controls() {
   );
 }
 
-export function RecordControls() {
+/** The three ways a take can start, as chips along the bottom. */
+export function RecordWhen() {
+  const index = useParam(params.recordMode);
+  const labels = ["DAW records", "DAW plays", "Armed only"];
   return (
-    <section className="panel">
-      <h2>Recording</h2>
-      <Segmented label="Record when" param={params.recordMode} />
-    </section>
+    <div className="chips" role="radiogroup" aria-label="Record when">
+      {params.recordMode.choices().map((choice, i) => (
+        <button key={choice} role="radio" aria-checked={i === index} className={`chip-btn ${i === index ? "on" : ""}`} onClick={() => params.recordMode.set(i)}>
+          {labels[i] ?? choice}
+        </button>
+      ))}
+    </div>
   );
 }

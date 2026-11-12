@@ -31,6 +31,7 @@ export function Preview() {
           if (canvas.width !== bitmap.width) canvas.width = bitmap.width;
           if (canvas.height !== bitmap.height) canvas.height = bitmap.height;
           canvas.getContext("2d")?.drawImage(bitmap, 0, 0);
+          canvas.parentElement?.style.setProperty("--ar", String(bitmap.width / bitmap.height));
         }
         bitmap.close();
       } catch {
