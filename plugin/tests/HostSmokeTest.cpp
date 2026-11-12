@@ -130,8 +130,11 @@ int main (int argc, char** argv)
 
     std::cout << "Loaded: " << types[0]->name << " by " << types[0]->manufacturerName << std::endl;
 
-    // Takes from earlier runs would be counted as this run's.
-    File::getSpecialLocation (File::userMoviesDirectory).getChildFile ("Griddy").getChildFile ("Sessions").deleteRecursively();
+    // A folder of its own, so a run never touches real takes. Takes from earlier runs would be counted as this run's.
+    const auto root = File::getSpecialLocation (File::tempDirectory).getChildFile ("GriddySmokeTest");
+    root.deleteRecursively();
+    root.createDirectory();
+    setenv ("GRIDDY_TAKES_FOLDER", root.getFullPathName().toRawUTF8(), 1);
 
     MemoryBlock savedState;
 
@@ -192,8 +195,8 @@ int main (int argc, char** argv)
         pumpMessages (6000); // the takes are finished and analysed on worker threads
 
         {
-            // The default output folder; the VST3 wrapper hides the plugin's own state, so look on disk.
-            const auto sessions = File::getSpecialLocation (File::userMoviesDirectory).getChildFile ("Griddy").getChildFile ("Sessions");
+            // The VST3 wrapper hides the plugin's own state, so look on disk.
+            const auto sessions = root.getChildFile ("Sessions");
             check (sessions.isDirectory(), "the plugin made a sessions folder");
 
             Array<File> sessionFolders;
@@ -221,7 +224,54 @@ int main (int argc, char** argv)
 
             slotFolders.sort (false);
             check (slotFolders.joinIntoString (",") == "slot1,slot2", "the takes landed in slots 1 and 2 (" + slotFolders.joinIntoString (",") + ")");
+
+            // Each take.mov is also copied, plainly named, into one flat folder (when this build can write .mov).
+            // take.mov is written after the take on its own thread, and the copy follows it.
+            Array<File> flat;
+            const auto anyMov = sessions.findChildFiles (File::findFiles, true, "take.mov").size();
+            for (int waited = 0; waited < 30000; waited += 250)
+            {
+                flat.clear();
+                root.getChildFile ("Takes").findChildFiles (flat, File::findFiles, false, "*.mov");
+                if (flat.size() >= anyMov)
+                    break;
+                pumpMessages (250);
+            }
+
+            StringArray flatNames;
+            for (auto& f : flat)
+                flatNames.add (f.getFileName());
+            flatNames.sort (false);
+            std::cout << "  plain copies: " << flatNames.joinIntoString (", ") << std::endl;
+            check (flat.size() == anyMov, "one plain copy per take.mov (" + String (flat.size()) + " of " + String (anyMov) + ")");
+            if (anyMov == 2)
+                check (flatNames.size() == 2 && flatNames[0].startsWith ("Slot 1 Take ") && flatNames[1].startsWith ("Slot 2 Take "),
+                       "plain copies are named by slot and take");
         }
+
+        // Record when is DAW plays (the default), so the finished take switched arm off by itself.
+        for (auto* instance : { plugin.get(), second.get() })
+            for (auto* param : instance->getParameters())
+                if (param->getName (64) == "Record arm")
+                    check (param->getValue() < 0.5f, "a finished take switches Record arm off");
+
+        // Press play again: the takes play back; nothing records over them. A new take would delete the
+        // one waiting in review, so compare the take folders themselves, not just how many there are.
+        auto takeFolders = [&root]
+        {
+            StringArray names;
+            for (auto& t : root.getChildFile ("Sessions").findChildFiles (File::findDirectories, true, "*.gtake"))
+                names.add (t.getFullPathName());
+            names.sort (false);
+            return names.joinIntoString ("|");
+        };
+        const auto before = takeFolders();
+        head.playing = true;
+        runAudio ({ plugin.get(), second.get() }, head, 2.0, true);
+        head.playing = false;
+        runAudio ({ plugin.get(), second.get() }, head, 0.5);
+        pumpMessages (1500);
+        check (takeFolders() == before, "playing again records no new take and keeps the takes it has");
 
         // Master mode: the second instance gives up its cell and arranges the grid instead.
         for (auto* param : second->getParameters())
@@ -279,6 +329,64 @@ int main (int argc, char** argv)
             if (param->getName (64) == "Cameras")
                 check (param->getCurrentValueAsText() == "9", "slot count restored from saved state");
     }
+
+    // A project or template saved by an older build with Record when on DAW records loads as DAW plays.
+    {
+        auto plugin = load (fm, *types[0]);
+        if (plugin == nullptr)
+            return 1;
+
+        // The VST3 host wraps the plugin's own state: base64 inside a VST3PluginState element.
+        auto outer = AudioProcessor::getXmlFromBinary (savedState.getData(), (int) savedState.getSize());
+        auto* component = outer != nullptr ? outer->getChildByName ("IComponent") : nullptr;
+        MemoryBlock inner;
+        std::unique_ptr<XmlElement> xml;
+        if (component != nullptr && inner.fromBase64Encoding (component->getAllSubText()))
+            xml = AudioProcessor::getXmlFromBinary (inner.getData(), (int) inner.getSize());
+
+        check (xml != nullptr && xml->getIntAttribute ("stateVersion") == 2, "saved state carries its version");
+
+        if (xml != nullptr)
+        {
+            xml->removeAttribute ("stateVersion");
+            int changed = 0;
+            for (auto* p : xml->getChildWithTagNameIterator ("PARAM"))
+                if (p->getStringAttribute ("id") == "recordMode")
+                {
+                    p->setAttribute ("value", 0.0);
+                    ++changed;
+                }
+            check (changed == 1, "the test found Record when in the saved state");
+
+            MemoryBlock innerOld, old;
+            AudioProcessor::copyXmlToBinary (*xml, innerOld);
+            component->deleteAllTextElements();
+            component->addTextElement (innerOld.toBase64Encoding());
+            AudioProcessor::copyXmlToBinary (*outer, old);
+            plugin->setStateInformation (old.getData(), (int) old.getSize());
+
+            for (auto* param : plugin->getParameters())
+                if (param->getName (64) == "Record when")
+                    check (param->getCurrentValueAsText() == "DAW plays", "an old DAW records state loads as DAW plays (" + param->getCurrentValueAsText() + ")");
+
+            // Saved again, DAW records is a real choice and stays.
+            for (auto* param : plugin->getParameters())
+                if (param->getName (64) == "Record when")
+                    param->setValueNotifyingHost (0.0f);
+
+            MemoryBlock fresh;
+            plugin->getStateInformation (fresh);
+            auto again = load (fm, *types[0]);
+            if (again == nullptr)
+                return 1;
+            again->setStateInformation (fresh.getData(), (int) fresh.getSize());
+            for (auto* param : again->getParameters())
+                if (param->getName (64) == "Record when")
+                    check (param->getCurrentValueAsText() == "DAW records", "a DAW records choice saved by this build is kept");
+        }
+    }
+
+    root.deleteRecursively();
 
     std::cout << (failures == 0 ? "HOST SMOKE TEST PASSED" : "HOST SMOKE TEST FAILED") << std::endl;
     return failures == 0 ? 0 : 1;

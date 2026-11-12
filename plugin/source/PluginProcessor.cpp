@@ -49,6 +49,12 @@ GriddyProcessor::GriddyProcessor()
             p->setValueNotifyingHost (on ? 1.0f : 0.0f);
     };
 
+    controls.setArmParameter = [this] (bool on)
+    {
+        if (auto* p = parameters.getParameter (ParamIDs::recordArm))
+            p->setValueNotifyingHost (on ? 1.0f : 0.0f);
+    };
+
     member = hub->addMember (controls);
 }
 
@@ -130,6 +136,7 @@ void GriddyProcessor::getStateInformation (juce::MemoryBlock& destData)
     state.setProperty ("outputFolder", hub->video().getOutputFolder().getFullPathName(), nullptr);
     state.setProperty ("session", hub->getSession(), nullptr);
     state.setProperty ("layout", juce::JSON::toString (hub->layoutToVar(), true), nullptr);
+    state.setProperty ("stateVersion", currentStateVersion, nullptr);
 
     if (auto xml = state.createXml())
         copyXmlToBinary (*xml, destData);
@@ -143,10 +150,20 @@ void GriddyProcessor::setStateInformation (const void* data, int sizeInBytes)
         return;
 
     auto state = juce::ValueTree::fromXml (*xml);
+
+    // Before version 2 the default Record when was DAW records, which never records in Live during plain
+    // playback. Projects and templates saved then still carry it, so move them to DAW plays once. A project
+    // saved after this keeps whatever was chosen.
+    if ((int) state.getProperty ("stateVersion", 1) < 2)
+        for (auto child : state)
+            if (child.hasType ("PARAM") && child.getProperty ("id").toString() == ParamIDs::recordMode
+                && (int) std::lround ((double) child.getProperty ("value", 1.0)) == 0)
+                child.setProperty ("value", 1.0, nullptr);
+
     parameters.replaceState (state);
 
     if (const auto folder = state.getProperty ("outputFolder").toString(); juce::File::isAbsolutePath (folder))
-        hub->video().setOutputFolder (juce::File (folder));
+        hub->changeOutputFolder (juce::File (folder));
 
     if (const auto layout = state.getProperty ("layout").toString(); layout.isNotEmpty())
         hub->applyLayoutVar (juce::JSON::parse (layout));

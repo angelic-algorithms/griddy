@@ -147,6 +147,8 @@ export function App() {
             <section className="panel">
               <h2>Takes folder</h2>
               <p className="path" title={status.outputFolder}>{status.outputFolder || "…"}</p>
+              {!!engine?.pendingFolder && <p className="path">Moves to {engine.pendingFolder} when this take ends.</p>}
+              <p className="path">Every finished take is also saved as a plain .mov in the Takes folder inside it.</p>
               <div className="row">
                 <button onClick={() => api.chooseOutputFolder()}>Choose…</button>
               </div>

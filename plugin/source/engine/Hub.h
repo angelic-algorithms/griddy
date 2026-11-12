@@ -39,6 +39,7 @@ struct MemberControls
     std::atomic<float>* master = nullptr;     // on: no slot, this instance is the one that arranges the grid
     std::function<void (int)> setSlotParameter; // message thread: show a slot (0 based) in the instance's own parameter
     std::function<void (bool)> setMasterParameter;
+    std::function<void (bool)> setArmParameter; // message thread: the hub switches arm off after a one shot take
 };
 
 /** One plugin instance as the hub sees it. Created and destroyed by Hub, used by that instance's threads. */
@@ -53,6 +54,10 @@ struct Member
     std::atomic<bool> wantRecording { false };
     std::atomic<bool> playing { false };
     std::atomic<bool> hostRecording { false };
+
+    // Control thread -> audio thread. In DAW plays and Armed a take is one shot: once it ends, nothing
+    // records until arm goes off and on again, so pressing play again plays the take instead of replacing it.
+    std::atomic<bool> takeDone { false };
     std::atomic<int64_t> requestSample { 0 };
     std::atomic<double> requestPpq { 0.0 }, requestBpm { 120.0 };
     std::atomic<int> requestNum { 4 }, requestDen { 4 };
@@ -101,7 +106,8 @@ public:
     void setSession (const juce::String& sessionId);
     juce::String getSession() const;
 
-    /** Move where takes are saved. Applies at once when nothing is recording or exporting; returns false if it had to wait. */
+    /** Move where takes are saved. Applies at once when nothing is recording or exporting; otherwise it is
+        kept as pending and applied by the control thread the moment they end, and this returns false. */
     bool changeOutputFolder (const juce::File& folder);
 
     VideoEngine& video() noexcept { return videoEngine; }
@@ -140,6 +146,8 @@ private:
     void run() override;
     void controlTick();
     void settleSlots();
+    void disarmLater (Member* member);
+    bool applyOutputFolder (const juce::File& folder);
     void buildEngine();
     void destroyEngine();
     void drawPreview();
@@ -182,6 +190,7 @@ private:
     std::atomic<int> exportState { exportIdle };
     std::atomic<bool> exportStopRequested { false };
     juce::File exportFile;       // guarded by statusLock
+    juce::File pendingFolder;    // guarded by statusLock: a folder chosen while a take or export ran
     juce::String exportError;    // guarded by statusLock
 
     juce::ThreadPool worker { 1 };

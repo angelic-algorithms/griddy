@@ -335,7 +335,25 @@ void Hub::setSession (const juce::String& id)
 
 bool Hub::changeOutputFolder (const juce::File& folder)
 {
-    if (folder == juce::File() || folder == videoEngine.getOutputFolder())
+    if (folder == juce::File())
+        return true;
+
+    {
+        const std::scoped_lock sl (statusLock);
+        pendingFolder = juce::File();
+    }
+
+    if (applyOutputFolder (folder))
+        return true;
+
+    const std::scoped_lock sl (statusLock);
+    pendingFolder = folder;
+    return false;
+}
+
+bool Hub::applyOutputFolder (const juce::File& folder)
+{
+    if (folder == videoEngine.getOutputFolder())
         return true;
 
     for (auto& r : slotRecording)
@@ -372,7 +390,11 @@ void Hub::processBlock (Member& member, const juce::AudioBuffer<float>& buffer, 
     // Arm gates everything, so a stray play never records over a take.
     const auto armed = member.controls.recordArm != nullptr && member.controls.recordArm->load() > 0.5f;
     const auto mode = readInt (member.controls.recordMode, 0);
-    const auto want = slot >= 0 && armed && t.isPlaying && (mode == 0 ? t.isRecording : true);
+
+    if (! armed)
+        member.takeDone.store (false, std::memory_order_relaxed);
+
+    const auto want = slot >= 0 && armed && t.isPlaying && (mode == 0 ? t.isRecording : ! member.takeDone.load (std::memory_order_relaxed));
 
     if (want && ! member.wantRecording.load (std::memory_order_relaxed))
     {
@@ -441,6 +463,24 @@ void Hub::processBlock (Member& member, const juce::AudioBuffer<float>& buffer, 
     }
 }
 
+void Hub::disarmLater (Member* member)
+{
+    // Parameters belong to the message thread. The member may be gone by then, so look it up again.
+    juce::MessageManager::callAsync ([this, member]
+    {
+        std::function<void (bool)> armFn;
+        {
+            const std::scoped_lock sl (memberLock);
+            for (auto& x : members)
+                if (x.get() == member)
+                    armFn = x->controls.setArmParameter;
+        }
+
+        if (armFn)
+            armFn (false);
+    });
+}
+
 //==============================================================================
 void Hub::run()
 {
@@ -460,6 +500,25 @@ void Hub::controlTick()
     }
 
     settleSlots();
+
+    // A folder chosen during a take moves over once nothing is recording, before the next take can start.
+    juce::File pending;
+    {
+        const std::scoped_lock sl (statusLock);
+        pending = pendingFolder;
+    }
+
+    if (pending != juce::File() && applyOutputFolder (pending))
+    {
+        {
+            const std::scoped_lock sl (statusLock);
+            if (pendingFolder == pending)
+                pendingFolder = juce::File();
+        }
+
+        const std::scoped_lock sl (engineLock);
+        e = engine.get();
+    }
 
     if (e != nullptr)
     {
@@ -495,6 +554,7 @@ void Hub::controlTick()
 
                 TakeRecorder::Config cfg;
                 cfg.embedSync = false;
+                cfg.flatFolder = videoEngine.getOutputFolder().getChildFile ("Takes");
 
                 if (r->start (slot, meta, cfg))
                 {
@@ -507,6 +567,13 @@ void Hub::controlTick()
             {
                 m.recording = false;
                 slotBusy[(size_t) slot] = true;
+
+                // DAW plays and Armed record on every play while armed, so the take ends the arm.
+                if (readInt (m.controls.recordMode, 0) != 0)
+                {
+                    m.takeDone = true;
+                    disarmLater (&m);
+                }
 
                 // Stopping writes the last files and take.json; rebuilding the slot analyses its audio.
                 worker.addJob ([this, slot]
@@ -904,6 +971,7 @@ juce::var Hub::getStatus (const Member* member) const
     {
         const std::scoped_lock sl (statusLock);
         obj->setProperty ("error", lastError);
+        obj->setProperty ("pendingFolder", pendingFolder.getFullPathName());
 
         auto x = std::make_unique<juce::DynamicObject>();
         static const char* names[] = { "idle", "waiting", "recording", "writing", "done", "failed" };

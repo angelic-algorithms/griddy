@@ -137,9 +137,9 @@ juce::WebBrowserComponent::Options GriddyEditor::makeBrowserOptions()
             folderChooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectDirectories,
                                         [this, complete] (const juce::FileChooser& chooser)
                                         {
+                                            // While a take or export runs the hub keeps the choice and moves over when it ends.
                                             if (const auto chosen = chooser.getResult(); chosen != juce::File())
-                                                if (! hub.changeOutputFolder (chosen))
-                                                    engine.setOutputFolder (chosen); // a take is running: applies when the project is reopened
+                                                hub.changeOutputFolder (chosen);
 
                                             complete (engine.getOutputFolder().getFullPathName());
                                         });

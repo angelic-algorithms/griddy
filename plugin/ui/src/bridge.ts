@@ -68,6 +68,7 @@ export type EngineStatus = {
   recording: boolean;
   armed: boolean;
   recordHint?: string;
+  pendingFolder?: string;
   hostRecording?: boolean;
   master: boolean;
   error: string;
@@ -213,6 +214,6 @@ export const params = {
   master: boolParam("master"),
   numSlots: intParam("numSlots", 1, 9, 4),
   recordArm: boolParam("recordArm"),
-  recordMode: choiceParam("recordMode", ["DAW records", "DAW plays", "Armed"], 0),
+  recordMode: choiceParam("recordMode", ["DAW records", "DAW plays", "Armed"], 1),
 };
 

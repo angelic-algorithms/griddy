@@ -62,6 +62,9 @@ public:
 
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
+    /** Saved with the state. 2: Record when defaults to DAW plays and older states are moved to it. */
+    static constexpr int currentStateVersion = 2;
+
 private:
     // Declared first, so it is destroyed last: the hub outlives every instance that uses it.
     juce::SharedResourcePointer<Hub> hub;
