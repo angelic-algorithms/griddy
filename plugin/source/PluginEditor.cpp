@@ -138,7 +138,8 @@ juce::WebBrowserComponent::Options GriddyEditor::makeBrowserOptions()
                                         [this, complete] (const juce::FileChooser& chooser)
                                         {
                                             if (const auto chosen = chooser.getResult(); chosen != juce::File())
-                                                engine.setOutputFolder (chosen);
+                                                if (! hub.changeOutputFolder (chosen))
+                                                    engine.setOutputFolder (chosen); // a take is running: applies when the project is reopened
 
                                             complete (engine.getOutputFolder().getFullPathName());
                                         });

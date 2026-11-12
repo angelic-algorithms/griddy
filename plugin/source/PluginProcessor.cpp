@@ -19,7 +19,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout GriddyProcessor::createParam
     layout.add (std::make_unique<AudioParameterBool> (ParameterID { ParamIDs::recordArm, 1 }, "Record arm", false));
 
     layout.add (std::make_unique<AudioParameterChoice> (ParameterID { ParamIDs::recordMode, 1 }, "Record when",
-                                                        StringArray { "DAW records", "DAW plays", "Armed" }, 0));
+                                                        StringArray { "DAW records", "DAW plays", "Armed" }, 1));
     return layout;
 }
 

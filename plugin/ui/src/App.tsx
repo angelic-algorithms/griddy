@@ -155,6 +155,8 @@ export function App() {
         )}
       </main>
 
+      {!!engine?.recordHint && <div className="record-hint" role="status">{engine.recordHint}</div>}
+
       <footer className="bottombar">
         <div className="record-when">
           <span className="rw-label">Record when</span>

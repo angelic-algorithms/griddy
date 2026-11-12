@@ -67,6 +67,8 @@ export type EngineStatus = {
   instances: number;
   recording: boolean;
   armed: boolean;
+  recordHint?: string;
+  hostRecording?: boolean;
   master: boolean;
   error: string;
   slots: SlotInfo[];

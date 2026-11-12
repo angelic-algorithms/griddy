@@ -192,3 +192,5 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 .templates { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
 .templates button { padding: 5px 2px; font-size: 12px; }
 .templates button.on { background: var(--accent); border-color: var(--accent); color: #111; }
+
+.record-hint { margin: 0 18px 8px; padding: 8px 12px; background: #f6e05e; color: #111; font: 700 12px/1.3 "SF Mono", ui-monospace, Menlo, monospace; text-transform: uppercase; letter-spacing: .05em; transform: rotate(-.4deg); box-shadow: 2px 2px 0 #000; }

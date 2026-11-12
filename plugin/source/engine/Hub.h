@@ -52,6 +52,7 @@ struct Member
     // Audio thread -> control thread.
     std::atomic<bool> wantRecording { false };
     std::atomic<bool> playing { false };
+    std::atomic<bool> hostRecording { false };
     std::atomic<int64_t> requestSample { 0 };
     std::atomic<double> requestPpq { 0.0 }, requestBpm { 120.0 };
     std::atomic<int> requestNum { 4 }, requestDen { 4 };
@@ -99,6 +100,9 @@ public:
     /** Which project's takes the grid plays. The first instance to say wins. */
     void setSession (const juce::String& sessionId);
     juce::String getSession() const;
+
+    /** Move where takes are saved. Applies at once when nothing is recording or exporting; returns false if it had to wait. */
+    bool changeOutputFolder (const juce::File& folder);
 
     VideoEngine& video() noexcept { return videoEngine; }
 

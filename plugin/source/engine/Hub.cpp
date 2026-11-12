@@ -333,6 +333,31 @@ void Hub::setSession (const juce::String& id)
         buildEngine();
 }
 
+bool Hub::changeOutputFolder (const juce::File& folder)
+{
+    if (folder == juce::File() || folder == videoEngine.getOutputFolder())
+        return true;
+
+    for (auto& r : slotRecording)
+        if (r.load())
+            return false;
+
+    const auto es = exportState.load();
+    if (es == exportWaiting || es == exportRecording || es == exportWriting)
+        return false;
+
+    folder.createDirectory();
+    if (! folder.isDirectory())
+        return false;
+
+    worker.removeAllJobs (true, 60000);
+    destroyEngine();
+    videoEngine.setOutputFolder (folder);
+    if (sampleRate > 0.0)
+        buildEngine();
+    return true;
+}
+
 juce::String Hub::getSession() const
 {
     return sessionId;
@@ -360,6 +385,7 @@ void Hub::processBlock (Member& member, const juce::AudioBuffer<float>& buffer, 
 
     member.wantRecording.store (want, std::memory_order_release);
     member.playing.store (t.isPlaying, std::memory_order_relaxed);
+    member.hostRecording.store (t.isRecording, std::memory_order_relaxed);
 
     // The master instance hears the mix; while an export runs it hands that to the exporter.
     if (member.isMaster.load (std::memory_order_relaxed))
@@ -853,6 +879,24 @@ juce::var Hub::getStatus (const Member* member) const
     obj->setProperty ("recording", mySlot >= 0 && slotRecording[(size_t) mySlot].load());
     obj->setProperty ("armed", member != nullptr && member->controls.recordArm != nullptr && member->controls.recordArm->load() > 0.5f);
     obj->setProperty ("sampleRate", sampleRate);
+
+    // Say why an armed instance is not recording, so a silent failure is never a mystery.
+    juce::String hint;
+    if (member != nullptr && mySlot >= 0 && member->controls.recordArm != nullptr && member->controls.recordArm->load() > 0.5f
+        && ! slotRecording[(size_t) mySlot].load())
+    {
+        const auto mode = readInt (member->controls.recordMode, 0);
+        if (! member->playing.load())
+            hint = "Armed. Press play in your DAW to start a take.";
+        else if (mode == 0 && ! member->hostRecording.load())
+            hint = "Armed and playing, but the DAW is not sending its record flag. Switch Record when to DAW plays.";
+        else if (audioEngine.load() == nullptr)
+            hint = "Griddy's engine is not running yet.";
+        else
+            hint = "Starting the take...";
+    }
+    obj->setProperty ("recordHint", hint);
+    obj->setProperty ("hostRecording", member != nullptr && member->hostRecording.load());
     obj->setProperty ("claimedMask", (int) claimedMask.load());
     obj->setProperty ("master", member != nullptr && member->isMaster.load());
     obj->setProperty ("layout", layoutToVar());
