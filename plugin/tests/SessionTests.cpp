@@ -106,6 +106,31 @@ struct SessionTests : juce::UnitTest
             expect (c.kind == SessionChoice::Kind::fresh && c.id != "../../escape");
         }
 
+        beginTest ("a take's waveform peaks are read from its audio and cached");
+        {
+            const auto take = root.getChildFile ("peaks.gtake");
+            take.createDirectory();
+            WavWriter w;
+            expect (w.open (take.getChildFile ("audio.wav"), 1000.0));
+            std::vector<float> loud (1000, 0.5f), quiet (1000, 0.1f);
+            w.write (loud.data(), 1000);
+            w.write (quiet.data(), 1000);
+            w.close();
+
+            const auto peaks = takePeaks (take, 4);
+            expectEquals ((int) peaks.size(), 4);
+            expectWithinAbsoluteError (peaks[0], 0.5f, 0.01f);
+            expectWithinAbsoluteError (peaks[3], 0.1f, 0.01f);
+            expect (take.getChildFile ("peaks.json").existsAsFile());
+
+            take.getChildFile ("audio.wav").deleteFile();
+            const auto cached = takePeaks (take, 4);
+            expectEquals ((int) cached.size(), 4, "second read comes from the cache");
+            if (cached.size() == 4)
+                expectWithinAbsoluteError (cached[1], 0.5f, 0.01f);
+            expect (takePeaks (root.getChildFile ("none.gtake"), 4).empty());
+        }
+
         root.deleteRecursively();
     }
 };

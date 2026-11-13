@@ -17,5 +17,6 @@ struct Report
 void hubRecordThenPlay (const Report& report);
 void hubSessions (const Report& report);
 void hubResetSlot (const Report& report);
+void hubUiStatus (const Report& report);
 
 } // namespace griddy::harness

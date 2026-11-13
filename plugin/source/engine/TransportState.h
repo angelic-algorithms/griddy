@@ -24,6 +24,8 @@ struct TransportSnapshot
     int64_t updateCounter = 0;         // bumps every audio block, so readers can tell it's fresh
     int64_t timeInSamples = 0;         // host time of the first sample of the last block
     bool isLooping = false;
+    bool hasLoopPoints = false;        // the host reported its loop range
+    double loopStartPpq = 0.0, loopEndPpq = 0.0;
 };
 
 /** A single writer, many reader snapshot using a sequence lock.
@@ -80,6 +82,9 @@ private:
         counter.store (s.updateCounter, std::memory_order_relaxed);
         samples.store (s.timeInSamples, std::memory_order_relaxed);
         looping.store (s.isLooping, std::memory_order_relaxed);
+        hasLoop.store (s.hasLoopPoints, std::memory_order_relaxed);
+        loopStart.store (s.loopStartPpq, std::memory_order_relaxed);
+        loopEnd.store (s.loopEndPpq, std::memory_order_relaxed);
     }
 
     TransportSnapshot loadFields() const noexcept
@@ -96,6 +101,9 @@ private:
         s.updateCounter = counter.load (std::memory_order_relaxed);
         s.timeInSamples = samples.load (std::memory_order_relaxed);
         s.isLooping = looping.load (std::memory_order_relaxed);
+        s.hasLoopPoints = hasLoop.load (std::memory_order_relaxed);
+        s.loopStartPpq = loopStart.load (std::memory_order_relaxed);
+        s.loopEndPpq = loopEnd.load (std::memory_order_relaxed);
         return s;
     }
 
@@ -104,7 +112,8 @@ private:
     std::atomic<int> num { 4 }, den { 4 };
     std::atomic<bool> playing { false }, recording { false }, hasPos { false };
     std::atomic<int64_t> counter { 0 }, samples { 0 };
-    std::atomic<bool> looping { false };
+    std::atomic<bool> looping { false }, hasLoop { false };
+    std::atomic<double> loopStart { 0.0 }, loopEnd { 0.0 };
 };
 
 } // namespace griddy

@@ -244,4 +244,37 @@ std::vector<float> computeEnvelope (const float* audio, size_t n, double sampleR
     return env;
 }
 
+std::vector<float> takePeaks (const juce::File& takeFolder, int count)
+{
+    count = juce::jlimit (1, 1024, count);
+    const auto cache = takeFolder.getChildFile ("peaks.json");
+
+    const auto cached = juce::JSON::parse (cache);
+    if (const auto* list = cached.getArray(); list != nullptr && list->size() == count)
+    {
+        std::vector<float> peaks;
+        for (const auto& v : *list)
+            peaks.push_back ((float) (double) v);
+        return peaks;
+    }
+
+    std::vector<float> audio;
+    double sampleRate = 0.0;
+    if (! readWav (takeFolder.getChildFile ("audio.wav"), audio, sampleRate) || audio.empty())
+        return {};
+
+    std::vector<float> peaks ((size_t) count, 0.0f);
+    for (size_t i = 0; i < audio.size(); ++i)
+    {
+        auto& p = peaks[juce::jmin ((size_t) count - 1, i * (size_t) count / audio.size())];
+        p = juce::jmax (p, std::abs (audio[i]));
+    }
+
+    juce::Array<juce::var> list;
+    for (auto p : peaks)
+        list.add (juce::jlimit (0.0, 1.0, std::round ((double) p * 1000.0) / 1000.0));
+    cache.replaceWithText (juce::JSON::toString (list, true));
+    return peaks;
+}
+
 } // namespace griddy

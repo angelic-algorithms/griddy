@@ -29,6 +29,7 @@ struct FakeInstance
         c.setSlotParameter = [this] (int s) { slot = (float) (s + 1); };
         c.setMasterParameter = [this] (bool on) { master = on ? 1.0f : 0.0f; };
         c.setArmParameter = [this] (bool on) { arm = on ? 1.0f : 0.0f; };
+        c.setCamerasParameter = [this] (int n) { cameras = (float) n; };
         return c;
     }
 };
@@ -48,6 +49,10 @@ struct FakeDaw final : juce::Thread
         while (! threadShouldExit())
         {
             buffer.clear();
+            if (const auto a = tone.load(); a > 0.0f)
+                for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+                    for (int i = 0; i < block; ++i)
+                        buffer.setSample (ch, i, a * (float) std::sin ((double) (n * block + i) * 0.05));
             TransportSnapshot t;
             t.hostProvidedPosition = true;
             t.isPlaying = playing.load();
@@ -80,6 +85,7 @@ struct FakeDaw final : juce::Thread
     static constexpr int block = 256;
     std::atomic<bool> playing { false }, recording { false };
     std::atomic<int64_t> position { 0 };
+    std::atomic<float> tone { 0.0f }; // amplitude of a sine every track hears; 0 is silence
 };
 
 /** Points every Hub at a test folder for as long as it lives, so no scenario ever touches real takes in ~/Movies/Griddy. */
@@ -144,7 +150,8 @@ struct HubWorld
     {
         daw->stopThread (2000);
         for (auto& i : instances)
-            hub->removeMember (i->member);
+            if (i->member != nullptr)
+                hub->removeMember (i->member);
         hub.reset();
         if (! keepRoot)
             root.deleteRecursively();
@@ -381,6 +388,61 @@ void hubResetSlot (const Report& report)
     int32_t shown = -1;
     w.watch (0, 1.0, shown);
     report.check (shown == first, "the restored take is back on screen");
+}
+
+void hubUiStatus (const Report& report)
+{
+    // What the Overdub Cam UI reads from the hub: track names, meters, where takes sit, the grid templates.
+    HubWorld w (report);
+    auto& one = *w.instances[0];
+
+    w.hub->setTrackName (one.member, "Lead Vox");
+    w.daw->tone = 0.5f;
+    pump (0.5);
+    const auto levels = w.hub->slotLevels();
+    report.check (levels[0] > 0.3f && levels[0] <= 0.51f, "slot 1's meter shows what its track hears (" + juce::String (levels[0], 2) + ")");
+    w.daw->tone = 0.0f;
+    pump (1.0);
+    report.check (w.hub->slotLevels()[0] < 0.05f, "the meter falls back when the track goes quiet");
+
+    // A take from bar 3: the timeline needs its position.
+    one.arm = 1.0f;
+    pump (0.3);
+    w.daw->playFrom (44100 * 4); // 4 seconds at 120 BPM is quarter note 8, bar 3
+    pump (1.5);
+    auto status = w.hub->getStatus (one.member);
+    const auto slot0 = status.getProperty ("slots", {})[0];
+    report.check (slot0.getProperty ("trackName", {}).toString() == "Lead Vox", "the status names slot 1's track");
+    report.check (std::abs ((double) slot0.getProperty ("recordStartPpq", -1.0) - 8.0) < 0.5, "the take in progress says where it began");
+    w.daw->stop();
+    pump (2.0);
+
+    status = w.hub->getStatus (one.member);
+    const auto take = status.getProperty ("takes", {})[0][0];
+    report.check (std::abs ((double) take.getProperty ("startPpq", -1.0) - 8.0) < 0.5, "the finished take says where it sits in the project");
+    report.check (take.getProperty ("timeSig", {}).toString() == "4/4" && (double) take.getProperty ("bpm", 0.0) > 0.0, "the take carries tempo and time signature");
+    report.check (w.hub->takePeaks (0, (int) take.getProperty ("id", -1)).size() == 64, "the take has 64 waveform peaks");
+
+    // Nine tracks hold nine slots: a three panel template would hide six of them, so it is refused.
+    report.check (! w.hub->choosePreset (presetIndex ("1p2")), "a template with fewer panels than the tracks' slots is refused");
+    const auto cells = status.getProperty ("layout", {}).getProperty ("cells", {});
+    report.check (cells.size() == 9, "the layout lists a rectangle for each of the nine cells");
+    report.check ((double) cells[0].getProperty ("x", 0.0) > 0.0, "the frame runs round the edge, so the first cell starts inside it");
+
+    // With only slots 1 and 2 held, the 1+2 template is allowed and every instance shows three cameras.
+    w.daw->stopThread (2000);
+    for (size_t i = 2; i < w.instances.size(); ++i)
+    {
+        w.hub->removeMember (w.instances[i]->member);
+        w.instances[i]->member = nullptr;
+    }
+    w.daw->startThread (juce::Thread::Priority::high);
+    pump (0.5);
+    report.check (w.hub->choosePreset (presetIndex ("1p2")), "the 1+2 template is accepted");
+    pump (0.5);
+    report.check (std::lround (one.cameras.load()) == 3, "choosing it sets the instances to three cameras");
+    const auto layout = w.hub->getStatus (one.member).getProperty ("layout", {});
+    report.check (layout.getProperty ("presetId", {}).toString() == "1p2" && layout.getProperty ("cells", {}).size() == 3, "the grid is 1+2");
 }
 
 } // namespace griddy::harness

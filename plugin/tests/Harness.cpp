@@ -1648,6 +1648,7 @@ int main (int argc, char** argv)
         { "hub_record_play", [] { griddy::harness::hubRecordThenPlay (hubReport()); }, true },
         { "hub_sessions", [] { griddy::harness::hubSessions (hubReport()); }, true },
         { "hub_reset_slot", [] { griddy::harness::hubResetSlot (hubReport()); }, true },
+        { "hub_ui_status", [] { griddy::harness::hubUiStatus (hubReport()); }, true },
         { "soak", [&] { soak (soakSeconds, soakSlots, soakCanvas); }, false },
     };
 

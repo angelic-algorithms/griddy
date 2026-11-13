@@ -88,6 +88,10 @@ private:
 /** Reads a whole mono WAV written by WavWriter. */
 bool readWav (const juce::File& file, std::vector<float>& samples, double& sampleRate);
 
+/** Peak levels (0..1) of a take's audio.wav in `count` equal parts, for the waveform in the UI. Computed once and cached
+    in the take folder as peaks.json. Empty if the take has no audio. */
+std::vector<float> takePeaks (const juce::File& takeFolder, int count = 64);
+
 /** The RMS envelope used for TakeMeta::envelope. */
 std::vector<float> computeEnvelope (const float* audio, size_t n, double sampleRate, double step = 0.1);
 

@@ -68,6 +68,8 @@ struct Member
     std::atomic<int64_t> hostSample { 0 };
     std::atomic<double> hostPpq { 0.0 };
     std::atomic<bool> hostLooping { false };
+    std::atomic<float> level { 0.0f };          // audio thread: peak of what this track hears, falling back slowly
+    juce::String trackName;                     // from the host; guarded by the hub's memberLock
 
     // Control thread only: what the transport log last wrote for this instance.
     struct Logged { bool valid = false, playing = false, recording = false, looping = false, armed = false; int mode = -1;
@@ -154,6 +156,14 @@ public:
     bool retakeTake (int slot, int takeId);
     bool restoreTake (int slot, int takeId);
     bool setSlip (int slot, int takeId, double seconds);
+    /** The host's name for an instance's track. Message thread. */
+    void setTrackName (Member* member, const juce::String& name);
+
+    /** What each slot's track hears right now (0..1), for the meters. */
+    std::array<float, 9> slotLevels() const;
+
+    /** Waveform peaks (0..1) of a take, for the UI. Empty if it has no audio. */
+    juce::var takePeaks (int slot, int takeId) const;
 
     // ---- grid layout (any instance can change it; the master instance is where the UI puts these controls) ----
     GridLayout getLayout() const;
@@ -236,6 +246,7 @@ private:
 
     std::array<std::atomic<bool>, maxSlots> slotBusy;
     std::array<std::atomic<bool>, maxSlots> slotRecording;
+    std::array<std::atomic<double>, maxSlots> recordStartPpq {}; // where the take in progress began, for the takes timeline
     std::array<std::atomic<bool>, maxSlots> resetRequested;
     std::array<std::atomic<uint64_t>, maxSlots> droppedFrames, droppedAudio;
 

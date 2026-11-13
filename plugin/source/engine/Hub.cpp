@@ -600,6 +600,15 @@ void Hub::processBlock (Member& member, const juce::AudioBuffer<float>& buffer, 
     member.hostSample.store (t.timeInSamples, std::memory_order_relaxed);
     member.hostPpq.store (t.ppqPosition, std::memory_order_relaxed);
     member.hostLooping.store (t.isLooping, std::memory_order_relaxed);
+
+    {
+        // A meter's peak: jumps up at once, falls by half in about a fifth of a second.
+        float peak = 0.0f;
+        for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+            peak = juce::jmax (peak, buffer.getMagnitude (ch, 0, buffer.getNumSamples()));
+        const auto fall = (float) std::exp (-3.5 * buffer.getNumSamples() / juce::jmax (1.0, sampleRate));
+        member.level.store (juce::jmax (peak, member.level.load (std::memory_order_relaxed) * fall), std::memory_order_relaxed);
+    }
     member.wantRecording.store (want, std::memory_order_release);
     member.playing.store (t.isPlaying, std::memory_order_relaxed);
     member.hostRecording.store (t.isRecording, std::memory_order_relaxed);
@@ -876,6 +885,7 @@ void Hub::controlTick()
                          + juce::String (meta.startHostSample) + " (record when " + juce::String (readInt (m.controls.recordMode, 0)) + ")");
                     m.recording = true;
                     m.lastCameraSerial = 0;
+                    recordStartPpq[(size_t) slot] = meta.startPpq;
                     slotRecording[(size_t) slot] = true;
                 }
             }
@@ -1346,10 +1356,51 @@ juce::var Hub::takesToVar (int slot) const
                                : e.meta.state == TakeMeta::State::review ? "review" : "archived");
         o->setProperty ("seconds", e.meta.durationSeconds);
         o->setProperty ("slip", e.meta.slipSeconds);
+        // Where the take sits in the project, for the takes timeline.
+        o->setProperty ("startPpq", e.meta.startPpq);
+        o->setProperty ("bpm", e.meta.bpm);
+        o->setProperty ("timeSig", juce::String (e.meta.timeSigNumerator) + "/" + juce::String (e.meta.timeSigDenominator));
+        o->setProperty ("fps", e.meta.fps);
         o->setProperty ("hasMov", e.folder.getChildFile ("take.mov").existsAsFile());
         list.add (juce::var (o.release()));
     }
 
+    return list;
+}
+
+void Hub::setTrackName (Member* member, const juce::String& name)
+{
+    const std::scoped_lock sl (memberLock);
+    for (auto& m : members)
+        if (m.get() == member)
+            m->trackName = name;
+}
+
+std::array<float, 9> Hub::slotLevels() const
+{
+    std::array<float, 9> levels {};
+    const std::scoped_lock sl (memberLock);
+    for (auto& m : members)
+        if (const auto s = m->slot.load(); juce::isPositiveAndBelow (s, 9))
+            levels[(size_t) s] = m->level.load (std::memory_order_relaxed);
+    return levels;
+}
+
+juce::var Hub::takePeaks (int slot, int takeId) const
+{
+    juce::File folder;
+    {
+        const std::scoped_lock sl (engineLock);
+        if (engine != nullptr && juce::isPositiveAndBelow (slot, maxSlots))
+            for (const auto& e : engine->history().listed (slot))
+                if (e.meta.takeId == takeId)
+                    folder = e.folder;
+    }
+
+    juce::Array<juce::var> list;
+    if (folder != juce::File())
+        for (auto p : griddy::takePeaks (folder, 64))
+            list.add (p);
     return list;
 }
 
@@ -1406,6 +1457,14 @@ juce::var Hub::getStatus (const Member* member) const
 
     const auto active = activeSlots.load();
 
+    std::array<juce::String, maxSlots> names;
+    {
+        const std::scoped_lock sl (memberLock);
+        for (auto& m : members)
+            if (const auto s = m->slot.load(); juce::isPositiveAndBelow (s, maxSlots))
+                names[(size_t) s] = m->trackName;
+    }
+
     juce::Array<juce::var> slotList;
     {
         const std::scoped_lock sl (engineLock);
@@ -1417,6 +1476,8 @@ juce::var Hub::getStatus (const Member* member) const
                 o->setProperty ("slot", s);
                 o->setProperty ("claimed", (claimedMask.load() & (1u << s)) != 0);
                 o->setProperty ("recording", slotRecording[(size_t) s].load());
+                o->setProperty ("recordStartPpq", recordStartPpq[(size_t) s].load());
+                o->setProperty ("trackName", names[(size_t) s]);
                 o->setProperty ("status", shown != nullptr ? statusName (shown->status) : "noTake");
                 o->setProperty ("source", shown != nullptr ? kindName (shown->kind) : "none");
                 o->setProperty ("takeId", shown != nullptr ? shown->takeId : -1);

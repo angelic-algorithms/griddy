@@ -64,6 +64,12 @@ GriddyProcessor::GriddyProcessor()
     member = hub->addMember (controls);
 }
 
+void GriddyProcessor::updateTrackProperties (const TrackProperties& properties)
+{
+    // Live sends the track's name when the plugin is added and whenever the track is renamed.
+    hub->setTrackName (member, properties.name.value_or (juce::String()));
+}
+
 GriddyProcessor::~GriddyProcessor()
 {
     hub->removeMember (member);
@@ -108,6 +114,13 @@ void GriddyProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
             s.isRecording = pos->getIsRecording();
             s.isLooping = pos->getIsLooping();
             s.timeInSamples = pos->getTimeInSamples().orFallback (0);
+
+            if (const auto loop = pos->getLoopPoints())
+            {
+                s.hasLoopPoints = true;
+                s.loopStartPpq = loop->ppqStart;
+                s.loopEndPpq = loop->ppqEnd;
+            }
 
             if (const auto sig = pos->getTimeSignature())
             {

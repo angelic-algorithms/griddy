@@ -128,6 +128,10 @@ juce::WebBrowserComponent::Options GriddyEditor::makeBrowserOptions()
         {
             complete (args.size() > 2 && hub.setSlip ((int) args[0], (int) args[1], (double) args[2]));
         })
+        .withNativeFunction ("takePeaks", [this] (const juce::Array<juce::var>& args, auto complete)
+        {
+            complete (args.size() > 1 ? hub.takePeaks ((int) args[0], (int) args[1]) : juce::var (juce::Array<juce::var>()));
+        })
         .withNativeFunction ("resetSlot", [this] (const juce::Array<juce::var>& args, auto complete)
         {
             complete (args.size() > 0 && hub.resetSlot ((int) args[0]));
@@ -261,6 +265,15 @@ juce::var GriddyEditor::transportToVar() const
     obj->setProperty ("playing", t.isPlaying);
     obj->setProperty ("recording", t.isRecording);
     obj->setProperty ("hostSync", t.hostProvidedPosition);
+    obj->setProperty ("looping", t.isLooping);
+    obj->setProperty ("hasLoop", t.hasLoopPoints);
+    obj->setProperty ("loopStart", t.loopStartPpq);
+    obj->setProperty ("loopEnd", t.loopEndPpq);
+
+    juce::Array<juce::var> levels;
+    for (auto l : hub.slotLevels())
+        levels.add (juce::jlimit (0.0, 1.0, std::round ((double) l * 1000.0) / 1000.0));
+    obj->setProperty ("levels", levels);
     return juce::var (obj.release());
 }
 
