@@ -1061,16 +1061,78 @@ GridLayout Hub::getLayout() const
     return layout;
 }
 
-void Hub::setLayout (Canvas canvas, float gap, uint32_t background, Template shape)
+void Hub::setLayout (Canvas canvas, float gap, uint32_t background, float radius)
 {
     const std::scoped_lock sl (layoutLock);
     // The file keeps the size it started with, so the canvas stays put while an export runs.
     const auto es = exportState.load();
     if (es != exportRecording && es != exportWriting)
         layout.canvas = canvas;
-    layout.shape = shape;
     layout.gap = juce::jlimit (0.0f, 48.0f, gap);
+    layout.radius = juce::jlimit (0.0f, 80.0f, radius);
     layout.background = background | 0xff000000u;
+}
+
+bool Hub::choosePreset (int index)
+{
+    if (! juce::isPositiveAndBelow (index, numPresets))
+        return false;
+
+    const auto panels = presetAt (index).panels;
+
+    // A track's slot never disappears from under it.
+    if ((claimedMask.load() >> panels) != 0)
+        return false;
+
+    {
+        const std::scoped_lock sl (layoutLock);
+        layout.preset = index;
+    }
+
+    std::vector<std::function<void (int)>> setters;
+    {
+        const std::scoped_lock sl (memberLock);
+        for (auto& m : members)
+            if (m->controls.setCamerasParameter)
+                setters.push_back (m->controls.setCamerasParameter);
+    }
+
+    for (auto& set : setters)
+        set (panels);
+
+    log ("grid template " + juce::String (presetAt (index).id));
+    return true;
+}
+
+int Hub::effectivePreset (const GridLayout& look, int numSlots)
+{
+    numSlots = juce::jlimit (1, 9, numSlots);
+
+    if (look.preset < 0)
+        return presetForTemplate (look.legacyShape, numSlots);
+
+    return presetAt (look.preset).panels == numSlots ? look.preset : defaultPresetFor (numSlots);
+}
+
+std::vector<Cell> Hub::cellsFor (const GridLayout& look, int numSlots)
+{
+    auto cells = presetLayout (effectivePreset (look, numSlots));
+    const auto n = (int) cells.size();
+
+    // The cell order is only honoured if it is a real permutation of the slots shown.
+    uint32_t seen = 0;
+    bool valid = true;
+    for (int i = 0; i < n; ++i)
+    {
+        valid = valid && juce::isPositiveAndBelow (look.order[(size_t) i], n) && (seen & (1u << look.order[(size_t) i])) == 0;
+        seen |= 1u << juce::jlimit (0, 8, look.order[(size_t) i]);
+    }
+
+    if (valid)
+        for (auto& c : cells)
+            c.slot = look.order[(size_t) c.slot];
+
+    return cells;
 }
 
 bool Hub::swapCells (int a, int b)
@@ -1088,16 +1150,40 @@ bool Hub::swapCells (int a, int b)
 juce::var Hub::layoutToVar() const
 {
     const auto l = getLayout();
+    const auto active = activeSlots.load();
+    const auto preset = effectivePreset (l, active);
+    const auto size = canvasSize (l.canvas);
+    const auto scale = (float) size.x / 1280.0f;
+
     auto o = std::make_unique<juce::DynamicObject>();
     o->setProperty ("canvas", (int) l.canvas);
-    o->setProperty ("template", (int) l.shape);
+    o->setProperty ("width", size.x);
+    o->setProperty ("height", size.y);
+    o->setProperty ("preset", preset);
+    o->setProperty ("presetId", juce::String (presetAt (preset).id));
     o->setProperty ("gap", (double) l.gap);
+    o->setProperty ("radius", (double) l.radius);
     o->setProperty ("background", juce::String::toHexString ((int) (l.background & 0xffffffu)).paddedLeft ('0', 6));
 
     juce::Array<juce::var> order;
     for (auto v : l.order)
         order.add (v);
     o->setProperty ("order", order);
+
+    // Where each cell sits in the picture, 0..1, frame included, so the UI can lay its overlays on top.
+    juce::Array<juce::var> cells;
+    for (const auto& c : cellsFor (l, active))
+    {
+        const auto r = framedCellArea (c.area, (float) size.x, (float) size.y, l.gap * scale);
+        auto cell = std::make_unique<juce::DynamicObject>();
+        cell->setProperty ("slot", c.slot);
+        cell->setProperty ("x", r.getX() / (float) size.x);
+        cell->setProperty ("y", r.getY() / (float) size.y);
+        cell->setProperty ("w", r.getWidth() / (float) size.x);
+        cell->setProperty ("h", r.getHeight() / (float) size.y);
+        cells.add (juce::var (cell.release()));
+    }
+    o->setProperty ("cells", cells);
     return juce::var (o.release());
 }
 
@@ -1109,7 +1195,14 @@ void Hub::applyLayoutVar (const juce::var& v)
     const auto canvas = juce::jlimit (0, 3, (int) v.getProperty ("canvas", 0));
     const auto gap = (float) (double) v.getProperty ("gap", 4.0);
     const auto bg = (uint32_t) juce::String (v.getProperty ("background", "0b0b0f")).getHexValue32();
-    setLayout ((Canvas) canvas, gap, bg, (Template) juce::jlimit (0, numTemplates - 1, (int) v.getProperty ("template", 0)));
+    setLayout ((Canvas) canvas, gap, bg, (float) (double) v.getProperty ("radius", 0.0));
+
+    {
+        // Layouts saved before the templates name a shape instead; it is matched to a template once the slot count is known.
+        const std::scoped_lock sl (layoutLock);
+        layout.preset = presetIndex (v.getProperty ("presetId", "").toString());
+        layout.legacyShape = (Template) juce::jlimit (0, numTemplates - 1, (int) v.getProperty ("template", 0));
+    }
 
     if (const auto* order = v.getProperty ("order", {}).getArray(); order != nullptr && order->size() == 9)
     {
@@ -1156,24 +1249,13 @@ void Hub::drawPreview()
                                     true, juce::SoftwareImageType());
     }
 
-    compositor.setGapPixels (look.gap * (float) size.x / 1280.0f);
+    const auto scale = (float) size.x / 1280.0f;
+    compositor.setFramed (true);
+    compositor.setGapPixels (look.gap * scale);
+    compositor.setCornerRadius (look.radius * scale);
     compositor.setBackground (look.background);
 
-    // The cell order is only honoured if it is a real permutation of the active slots.
-    auto cells = computeLayout (active, look.shape);
-    {
-        uint32_t seen = 0;
-        bool valid = true;
-        for (int i = 0; i < active; ++i)
-        {
-            valid = valid && juce::isPositiveAndBelow (look.order[(size_t) i], active) && (seen & (1u << look.order[(size_t) i])) == 0;
-            seen |= 1u << juce::jlimit (0, 8, look.order[(size_t) i]);
-        }
-
-        if (valid)
-            for (auto& c : cells)
-                c.slot = look.order[(size_t) c.slot];
-    }
+    const auto cells = cellsFor (look, active);
 
     compositor.render (output, cells, [&] (int slot) -> std::shared_ptr<const VideoFrame>
     {

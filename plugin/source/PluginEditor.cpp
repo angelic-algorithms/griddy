@@ -91,9 +91,13 @@ juce::WebBrowserComponent::Options GriddyEditor::makeBrowserOptions()
             if (args.size() > 2)
                 hub.setLayout ((Canvas) juce::jlimit (0, 3, (int) args[0]), (float) (double) args[1],
                                (uint32_t) args[2].toString().getHexValue32(),
-                               (Template) juce::jlimit (0, numTemplates - 1, args.size() > 3 ? (int) args[3] : 0));
+                               args.size() > 3 ? (float) (double) args[3] : hub.getLayout().radius);
 
             complete (hub.layoutToVar());
+        })
+        .withNativeFunction ("choosePreset", [this] (const juce::Array<juce::var>& args, auto complete)
+        {
+            complete (args.size() > 0 && hub.choosePreset ((int) args[0]));
         })
         .withNativeFunction ("startExport", [this] (const juce::Array<juce::var>&, auto complete)
         {

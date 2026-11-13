@@ -127,9 +127,10 @@ void Compositor::render (juce::Image& output, const std::vector<Cell>& cells, co
     {
         // Normalised (0..1) cell to pixels, then shrink by half the gap on every side
         // so neighbouring cells end up exactly one gap apart.
-        auto area = juce::Rectangle<float> (cell.area.getX() * outW, cell.area.getY() * outH,
-                                            cell.area.getWidth() * outW, cell.area.getHeight() * outH)
-                        .reduced (cells.size() > 1 ? halfGap : 0.0f);
+        auto area = framed ? framedCellArea (cell.area, outW, outH, gap)
+                           : juce::Rectangle<float> (cell.area.getX() * outW, cell.area.getY() * outH,
+                                                     cell.area.getWidth() * outW, cell.area.getHeight() * outH)
+                                 .reduced (cells.size() > 1 ? halfGap : 0.0f);
 
         if (area.isEmpty())
             continue;
@@ -147,6 +148,17 @@ void Compositor::render (juce::Image& output, const std::vector<Cell>& cells, co
             g.setColour (juce::Colours::white.withAlpha (0.45f));
             g.setFont (juce::FontOptions (juce::jmax (12.0f, area.getHeight() * 0.08f)));
             g.drawText ("Slot " + juce::String (cell.slot + 1) + ": no camera", area, juce::Justification::centred);
+        }
+
+        // Round the corners by painting the frame colour back over them.
+        if (const auto r = juce::jmin (radius, area.getWidth() * 0.5f, area.getHeight() * 0.5f); r > 0.0f)
+        {
+            juce::Path corners;
+            corners.addRectangle (area);
+            corners.addRoundedRectangle (area, r);
+            corners.setUsingNonZeroWinding (false);
+            g.setColour (juce::Colour (background));
+            g.fillPath (corners);
         }
     }
 }

@@ -97,6 +97,63 @@ struct LayoutTests : juce::UnitTest
             const auto cells = computeLayout (3);
             expectWithinAbsoluteError (cells[2].area.getCentreX(), 0.5f, 1.0e-5f);
         }
+
+        beginTest ("every template covers the frame exactly, with no overlap, and has its panel count");
+        {
+            const int panels[] = { 1, 2, 2, 3, 3, 4, 4, 5, 6, 6, 7, 8, 9 };
+            for (int p = 0; p < numPresets; ++p)
+            {
+                const auto cells = presetLayout (p);
+                expectEquals ((int) cells.size(), panels[p], presetAt (p).id);
+                expectEquals (presetAt (p).panels, panels[p]);
+
+                float area = 0.0f;
+                for (size_t i = 0; i < cells.size(); ++i)
+                {
+                    expectEquals (cells[i].slot, (int) i);
+                    area += cells[i].area.getWidth() * cells[i].area.getHeight();
+                    expect (juce::Rectangle<float> (0, 0, 1, 1).expanded (1.0e-5f).contains (cells[i].area), "cell outside frame");
+                    for (size_t j = i + 1; j < cells.size(); ++j)
+                        expect (cells[i].area.reduced (1.0e-4f).getIntersection (cells[j].area.reduced (1.0e-4f)).isEmpty(), "cells overlap");
+                }
+                expectWithinAbsoluteError (area, 1.0f, 1.0e-4f);
+            }
+        }
+
+        beginTest ("templates match the design's cells");
+        {
+            // 1+2: a big cell two thirds wide on the left, two stacked on the right.
+            const auto c = presetLayout (presetIndex ("1p2"));
+            expect (c[0].area == juce::Rectangle<float> (0.0f, 0.0f, 2.0f / 3.0f, 1.0f));
+            expect (c[2].area == juce::Rectangle<float> (2.0f / 3.0f, 0.5f, 1.0f / 3.0f, 0.5f));
+            // 3+4: three on top, four below.
+            const auto d = presetLayout (presetIndex ("3p4"));
+            expectWithinAbsoluteError (d[3].area.getWidth(), 0.25f, 1.0e-5f);
+            expectWithinAbsoluteError (d[0].area.getWidth(), 1.0f / 3.0f, 1.0e-5f);
+        }
+
+        beginTest ("every slot count has a default template, and old layouts find one");
+        for (int n = 1; n <= 9; ++n)
+        {
+            expectEquals (presetAt (defaultPresetFor (n)).panels, n);
+            for (int t = 0; t < numTemplates; ++t)
+                expectEquals (presetAt (presetForTemplate ((Template) t, n)).panels, n);
+        }
+        expectEquals (presetForTemplate (Template::heroLeft, 3), presetIndex ("1p2"));
+        expectEquals (presetForTemplate (Template::stack, 3), presetIndex ("3s"));
+
+        beginTest ("a framed cell keeps one frame width around the edge and between cells, like the design's CSS grid");
+        {
+            // 300 x 100 picture, frame 10: three columns of (300 - 4 * 10) / 3 wide, starting at 10.
+            const auto a = framedCellArea ({ 0.0f, 0.0f, 1.0f / 3.0f, 1.0f }, 300.0f, 100.0f, 10.0f);
+            expectWithinAbsoluteError (a.getX(), 10.0f, 1.0e-3f);
+            expectWithinAbsoluteError (a.getWidth(), 260.0f / 3.0f, 1.0e-3f);
+            expectWithinAbsoluteError (a.getY(), 10.0f, 1.0e-3f);
+            expectWithinAbsoluteError (a.getHeight(), 80.0f, 1.0e-3f);
+            // Spanning two columns covers the gap between them.
+            const auto b = framedCellArea ({ 0.0f, 0.0f, 2.0f / 3.0f, 1.0f }, 300.0f, 100.0f, 10.0f);
+            expectWithinAbsoluteError (b.getWidth(), 2.0f * 260.0f / 3.0f + 10.0f, 1.0e-3f);
+        }
     }
 };
 
@@ -228,6 +285,23 @@ struct CompositorTests : juce::UnitTest
             expect (out.getPixelAt (100, 150) == green);
             expect (out.getPixelAt (300, 150) == yellow);
             expect (out.getPixelAt (200, 50) != red && out.getPixelAt (200, 50) != blue, "gap missing between cells");
+        }
+
+        beginTest ("a framed picture has the frame colour round the edge and rounded cell corners");
+        {
+            juce::Image out (juce::Image::ARGB, 400, 200, true, juce::SoftwareImageType());
+            Compositor comp;
+            comp.setFramed (true);
+            comp.setGapPixels (10.0f);
+            comp.setCornerRadius (30.0f);
+            comp.setBackground (0xffff6a1au);
+            comp.render (out, presetLayout (presetIndex ("1x1")), [&] (int) { return solid (blue); });
+
+            const auto frame = juce::Colour (0xffff6a1au);
+            expect (out.getPixelAt (5, 100) == frame, "frame round the edge");
+            expect (out.getPixelAt (200, 100) == blue);
+            expect (out.getPixelAt (12, 12) == frame, "corner is rounded off");
+            expect (out.getPixelAt (40, 100) == blue, "edge of the cell away from the corner is picture");
         }
 
         beginTest ("missing camera draws a placeholder, not garbage");

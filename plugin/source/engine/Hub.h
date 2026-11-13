@@ -24,8 +24,10 @@ namespace griddy
 struct GridLayout
 {
     Canvas canvas = Canvas::hd720;
-    Template shape = Template::grid;
-    float gap = 4.0f;                 // pixels between cells at the canvas size
+    int preset = -1;                  // index into the presets (CollageLayout.h); -1: a layout saved before presets, see legacyShape
+    Template legacyShape = Template::grid;
+    float gap = 4.0f;                 // frame thickness: pixels around and between cells, measured on a 1280 wide canvas
+    float radius = 0.0f;              // cell corner radius, measured the same way
     uint32_t background = 0xff0b0b0fu;
     std::array<int, 9> order { 0, 1, 2, 3, 4, 5, 6, 7, 8 }; // which slot sits in each cell, in reading order
 };
@@ -41,6 +43,7 @@ struct MemberControls
     std::atomic<float>* master = nullptr;     // on: no slot, this instance is the one that arranges the grid
     std::function<void (int)> setSlotParameter; // message thread: show a slot (0 based) in the instance's own parameter
     std::function<void (bool)> setMasterParameter;
+    std::function<void (int)> setCamerasParameter; // message thread: the grid template sets how many cameras every instance shows
     std::function<void (bool)> setArmParameter; // message thread: the hub switches arm off after a one shot take
 };
 
@@ -154,7 +157,17 @@ public:
 
     // ---- grid layout (any instance can change it; the master instance is where the UI puts these controls) ----
     GridLayout getLayout() const;
-    void setLayout (Canvas canvas, float gap, uint32_t background, Template shape = Template::grid);
+    void setLayout (Canvas canvas, float gap, uint32_t background, float radius);
+
+    /** Choose a grid template. It also sets every instance's camera count to the template's panels. Refused (false)
+        when a track holds a slot the template has no panel for. */
+    bool choosePreset (int index);
+
+    /** The template in use for a number of slots: the chosen one when its panel count matches, else the default for that count. */
+    static int effectivePreset (const GridLayout& look, int numSlots);
+
+    /** Cells as drawn: template, then the cell order. */
+    static std::vector<Cell> cellsFor (const GridLayout& look, int numSlots);
     bool swapCells (int a, int b);
     juce::var layoutToVar() const;
     void applyLayoutVar (const juce::var& v);

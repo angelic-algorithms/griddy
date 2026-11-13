@@ -36,4 +36,34 @@ std::vector<Cell> computeLayout (int numSlots, Template shape = Template::grid);
 /** Grid shape for n tiles: columns = ceil(sqrt(n)), rows = ceil(n / columns). */
 juce::Point<int> gridShapeFor (int numTiles);
 
+/** The grid templates the UI offers, in the order it shows them (the Overdub Cam design). Each one has a fixed
+    number of panels and is drawn on a small grid of columns and rows; a panel can span several of them. */
+struct Preset
+{
+    const char* id;    // stable name, saved with the project
+    const char* label; // what the template button says
+    int panels;
+};
+
+constexpr int numPresets = 13;
+
+/** The preset at an index, clamped into range. */
+const Preset& presetAt (int index);
+
+/** Index of a preset by id, or -1. */
+int presetIndex (const juce::String& id);
+
+/** The preset a slot count falls back to when the chosen one has a different number of panels. */
+int defaultPresetFor (int panels);
+
+/** The closest preset to a layout saved before presets existed. */
+int presetForTemplate (Template shape, int numSlots);
+
+/** Normalised cells of a preset, cell i holding slot i. */
+std::vector<Cell> presetLayout (int index);
+
+/** Where a normalised cell lands in a framed picture of the given size: the frame keeps `gap` pixels around the
+    edge and between cells (like CSS grid with padding and gap both equal to the frame thickness). */
+juce::Rectangle<float> framedCellArea (juce::Rectangle<float> normalised, float width, float height, float gap);
+
 } // namespace griddy

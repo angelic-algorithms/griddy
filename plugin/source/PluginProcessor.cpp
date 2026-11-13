@@ -49,6 +49,12 @@ GriddyProcessor::GriddyProcessor()
             p->setValueNotifyingHost (on ? 1.0f : 0.0f);
     };
 
+    controls.setCamerasParameter = [this] (int cameras)
+    {
+        if (auto* p = parameters.getParameter (ParamIDs::numSlots))
+            p->setValueNotifyingHost (p->convertTo0to1 ((float) cameras));
+    };
+
     controls.setArmParameter = [this] (bool on)
     {
         if (auto* p = parameters.getParameter (ParamIDs::recordArm))

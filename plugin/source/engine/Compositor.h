@@ -26,6 +26,12 @@ public:
     /** Pixels of dark gap between cells, at the output resolution. */
     void setGapPixels (float g) noexcept { gap = g; }
 
+    /** Framed: the gap also runs around the outside edge, and holds for a single cell too (the grid's frame). */
+    void setFramed (bool f) noexcept { framed = f; }
+
+    /** Rounded cell corners, in output pixels. 0 is square. */
+    void setCornerRadius (float r) noexcept { radius = r; }
+
     /** The colour behind and between the cells, as 0xAARRGGBB. */
     void setBackground (uint32_t argb) noexcept { background = argb; }
 
@@ -34,6 +40,8 @@ public:
 
 private:
     float gap = 4.0f;
+    float radius = 0.0f;
+    bool framed = false;
     uint32_t background = 0xff0b0b0fu;
 };
 
