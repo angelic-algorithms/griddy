@@ -23,10 +23,14 @@
 #include <functional>
 #include <map>
 #include <set>
+#include <thread>
 
-#if JUCE_LINUX
+#if JUCE_LINUX || JUCE_MAC
  #include <sys/resource.h>
  #include <unistd.h>
+#endif
+#if JUCE_MAC
+ #include <mach/mach.h>
 #endif
 
 using namespace griddy;
@@ -142,6 +146,7 @@ struct Recorded
     bool movOk = false;
     juce::File flat; // the plainly named copy of take.mov, when one was asked for
     double stopSeconds = 0.0; // how long TakeRecorder::stop() took
+    uint64_t dropped = 0;     // camera frames the recorder dropped
     int label() const { return entry.meta.takeId & 0xff; }
     int32_t id() const { return entry.meta.takeId; }
 };
@@ -200,6 +205,7 @@ Recorded recordTake (PlaybackEngine& eng, int slot, double seconds, const std::v
         readWav (r.entry.folder.getChildFile ("audio.wav"), r.audio, sr);
     }
 
+    r.dropped = rec.framesDropped();
     if (rec.framesDropped() > 0)
         say ("  note: recorder dropped " + juce::String ((int) rec.framesDropped()) + " frames");
 
@@ -219,6 +225,17 @@ struct Clip
     double anchorTake = 0.0;
     double stretch = 1.0;    // take seconds per host second; 1.0 unless the clip is warped
     float gain = 1.0f;
+    double fadeIn = 0.0, fadeOut = 0.0; // seconds of linear fade at the clip's edges, as a crossfade in the DAW makes
+
+    float fadeAt (double host) const
+    {
+        auto g = 1.0;
+        if (fadeIn > 0.0)
+            g = std::min (g, (host - startHost) / fadeIn);
+        if (fadeOut > 0.0)
+            g = std::min (g, (startHost + length - host) / fadeOut);
+        return (float) std::clamp (g, 0.0, 1.0);
+    }
 
     static Clip place (const Recorded& r, double startHost, double offset, double length)
     {
@@ -269,7 +286,7 @@ struct Timeline
                     continue;
 
                 const auto frac = (float) (pos - (double) idx);
-                out[i] += c.gain * ((*c.audio)[(size_t) idx] * (1.0f - frac) + (*c.audio)[(size_t) idx + 1] * frac);
+                out[i] += c.gain * c.fadeAt (host) * ((*c.audio)[(size_t) idx] * (1.0f - frac) + (*c.audio)[(size_t) idx + 1] * frac);
             }
         }
     }
@@ -403,6 +420,8 @@ struct Sample
     SyncKind kind = SyncKind::none;
     bool warp = false;
     bool playing = false;
+    bool gap = false;      // the engine says no clip plays: black
+    bool black = false;    // the picture really is black
 };
 
 struct World
@@ -468,7 +487,10 @@ std::vector<Sample> observe (World& w, Timeline& tl, std::vector<Event> events, 
             s.status = f->status;
             s.kind = f->kind;
             s.warp = f->warpSuspected;
-            s.shown = decodeCoded (f->frame->image, s.label, s.counter);
+            s.gap = f->gap;
+            s.black = f->frame->image.isValid() && f->frame->image.getPixelAt (f->frame->image.getWidth() / 2, f->frame->image.getHeight() / 2).getBrightness() < 0.02f
+                      && f->frame->image.getPixelAt (1, 1).getBrightness() < 0.02f;
+            s.shown = ! f->gap && decodeCoded (f->frame->image, s.label, s.counter); // black is no take
 
             if (s.shown)
             {
@@ -481,6 +503,14 @@ std::vector<Sample> observe (World& w, Timeline& tl, std::vector<Event> events, 
                         s.errMs = (shownTime - truth.takeSeconds) * 1000.0;
                 }
             }
+        }
+
+        if (getenv ("GRIDDY_DEBUG"))
+        {
+            TakeChange c;
+            while (w.engine->popTakeChange (slot, c))
+                say ("   engine t " + juce::String (s.t, 3) + " host " + juce::String (c.hostSeconds, 3) + ": " + juce::String (c.oldTake) + "/" + juce::String (c.oldPass)
+                     + " -> " + juce::String (c.newTake) + "/" + juce::String (c.newPass) + " (" + TakeChange::pathName (c.path) + ")");
         }
 
         out.push_back (s);
@@ -1018,12 +1048,431 @@ void embeddedSync()
     finish (*w);
 }
 
+
+double processCpuSeconds();
+double rssMegabytes();
+
+//==============================================================================
+// Comping: several takes recorded over the same stretch, pieces of each on the timeline
+
+// A take written straight to disk, without recording in real time: many takes for load tests. Small coded frames at 10 fps.
+Recorded fakeTake (PlaybackEngine& eng, int slot, const std::vector<float>& perf, double hostStart)
+{
+    constexpr int w = 192, h = 108;
+    TakeMeta meta;
+    meta.sampleRate = SR;
+    meta.startHostSample = (int64_t) (hostStart * SR);
+    meta.startPpq = hostStart * 2.0;
+    meta.bpm = 120.0;
+    meta.width = meta.proxyWidth = w;
+    meta.height = meta.proxyHeight = h;
+    meta.fps = 10.0;
+    auto e = eng.history().beginTake (slot, meta);
+
+    {
+        WavWriter wav;
+        wav.open (e.folder.getChildFile ("audio.wav"), SR);
+        wav.write (perf.data(), (int) perf.size());
+        wav.close();
+    }
+
+    const auto seconds = (double) perf.size() / SR;
+    const auto n = (int) (seconds * meta.fps);
+    juce::JPEGImageFormat jpeg;
+    for (int i = 0; i < n; ++i)
+    {
+        const auto img = makeCodedFrame (w, h, e.meta.takeId & 0xff, i);
+        for (auto sub : { "frames", "proxy" })
+        {
+            juce::FileOutputStream out (e.folder.getChildFile (sub).getChildFile (juce::String::formatted ("%06d.jpg", i)));
+            jpeg.writeImageToStream (img, out);
+        }
+        e.meta.frameTimes.push_back ((double) i / meta.fps);
+    }
+
+    e.meta.numFrames = n;
+    e.meta.durationSeconds = seconds;
+    e.meta.envelope = computeEnvelope (perf.data(), perf.size(), SR);
+    eng.history().finishTake (e);
+    e.meta.state = TakeMeta::State::review;
+
+    Recorded r;
+    r.entry = e;
+    r.audio = perf;
+    return r;
+}
+
+/** Samples where the picture shows the right take and time (labelOk, small error), as a fraction of those with truth. */
+double rightFraction (const std::vector<Sample>& s, double from, double to, double tolMs = 80.0)
+{
+    int n = 0, good = 0;
+    for (const auto& x : s)
+        if (x.t >= from && x.t < to && x.truth && x.playing)
+        {
+            ++n;
+            good += x.labelOk && std::abs (x.errMs) < tolMs ? 1 : 0;
+        }
+    return n > 0 ? (double) good / n : 0.0;
+}
+
+/** rightFraction for half second comp pieces starting at `first`, leaving out `settle` seconds after each cut. */
+double rightAwayFromCuts (const std::vector<Sample>& s, double first, double to, double settle)
+{
+    int n = 0, good = 0;
+    for (const auto& x : s)
+        if (x.t >= first && x.t < to && x.truth && x.playing && std::fmod (x.t - first, 0.5) > settle)
+        {
+            ++n;
+            good += x.labelOk && std::abs (x.errMs) < 100.0 ? 1 : 0;
+        }
+    return n > 0 ? (double) good / n : 0.0;
+}
+
+int flips (const std::vector<Sample>& s, double from, double to)
+{
+    int changes = 0, last = -1;
+    for (const auto& x : s)
+        if (x.t >= from && x.t < to && x.shown)
+        {
+            if (last >= 0 && x.label != last && getenv ("GRIDDY_DEBUG"))
+                say ("   change at t " + juce::String (x.t, 3) + " host " + juce::String (x.host, 3) + ": " + juce::String (last) + " -> " + juce::String (x.label)
+                     + " kind " + juce::String ((int) x.kind) + " status " + juce::String ((int) x.status));
+            if (last >= 0 && x.label != last)
+                ++changes;
+            last = x.label;
+        }
+    return changes;
+}
+
+int countIf (const std::vector<Sample>& s, double from, double to, const std::function<bool (const Sample&)>& f, int* total = nullptr)
+{
+    int n = 0, hit = 0;
+    for (const auto& x : s)
+        if (x.t >= from && x.t < to)
+        {
+            ++n;
+            hit += f (x) ? 1 : 0;
+        }
+    if (total != nullptr)
+        *total = n;
+    return hit;
+}
+
+/** Seconds from `at` until the shown take is `label` and stays so for 3 samples. */
+double switchTime (const std::vector<Sample>& s, double at, int label)
+{
+    int run = 0;
+    for (const auto& x : s)
+    {
+        if (x.t < at)
+            continue;
+        run = (x.shown && x.label == label) ? run + 1 : 0;
+        if (run >= 3)
+            return x.t - at - 2 * 0.033;
+    }
+    return -1.0;
+}
+
+// Three takes recorded over the same 5 seconds; the comp plays A, then B, then C, then A again, each where it was recorded.
+void compAligned()
+{
+    auto w = makeWorld (1);
+    auto& A = w->add (recordTake (*w->engine, 0, 5.0, performance (101), 10.0));
+    auto& B = w->add (recordTake (*w->engine, 0, 5.0, performance (102), 10.0));
+    auto& C = w->add (recordTake (*w->engine, 0, 5.0, performance (103), 10.0));
+    keepAndLoad (*w, 0, C);
+
+    Timeline tl (1);
+    tl.clips[0].push_back (Clip::place (A, 10.0, 0.0, 1.5));
+    tl.clips[0].push_back (Clip::place (B, 11.5, 1.5, 1.5));
+    tl.clips[0].push_back (Clip::place (C, 13.0, 3.0, 1.0));
+    tl.clips[0].push_back (Clip::place (A, 14.0, 4.0, 1.0));
+    const auto s = observe (*w, tl, { { Event::seek, 0.0, 9.8 }, { Event::play, 0.0 } }, 9.8, 5.6, 0);
+
+    const Recorded* order[] = { &A, &B, &C, &A };
+    const double cuts[] = { 0.2, 1.7, 3.2, 4.2 };
+    for (int i = 1; i < 4; ++i)
+    {
+        const auto t = switchTime (s, cuts[i], order[i]->label());
+        metric ("comp switch " + juce::String (i), t * 1000.0, "ms");
+        check (t >= 0.0 && t < 0.2, "comp cut " + juce::String (i) + " shows the new take within 200 ms (" + juce::String (t, 3) + " s)");
+    }
+
+    for (int i = 0; i < 4; ++i)
+    {
+        const auto from = cuts[i] + 0.25, to = (i < 3 ? cuts[i + 1] : 5.15);
+        const auto right = rightFraction (s, from, to);
+        check (right > 0.95, "comp piece " + juce::String (i + 1) + " shows its own take in sync (" + juce::String (right * 100.0, 0) + " percent)");
+    }
+
+    const auto f = flips (s, 0.3, 5.15);
+    check (f == 3, "hard cuts only: the picture changes take exactly 3 times (" + juce::String (f) + ")");
+    finish (*w);
+}
+
+// Crossfaded comp cuts, as Live draws them between take lanes.
+void compCrossfade()
+{
+    for (double fade : { 0.020, 0.100 })
+    {
+        auto w = makeWorld (1);
+        auto& A = w->add (recordTake (*w->engine, 0, 5.0, performance (111), 10.0));
+        auto& B = w->add (recordTake (*w->engine, 0, 5.0, performance (112), 10.0));
+        keepAndLoad (*w, 0, B);
+
+        Timeline tl (1);
+        auto a = Clip::place (A, 10.0, 0.0, 2.5 + fade / 2.0);
+        a.fadeOut = fade;
+        auto b = Clip::place (B, 12.5 - fade / 2.0, 2.5 - fade / 2.0, 2.5 + fade / 2.0);
+        b.fadeIn = fade;
+        tl.clips[0].push_back (a);
+        tl.clips[0].push_back (b);
+        const auto s = observe (*w, tl, { { Event::seek, 0.0, 9.8 }, { Event::play, 0.0 } }, 9.8, 5.4, 0);
+
+        const auto name = juce::String (fade * 1000.0, 0) + " ms crossfade";
+        const auto t = switchTime (s, 2.7 - fade / 2.0, B.label());
+        metric ("switch after a " + name, t * 1000.0, "ms");
+        check (t >= 0.0 && t < 0.25, name + ": the new take shows within 250 ms of the fade (" + juce::String (t, 3) + " s)");
+        check (flips (s, 0.3, 5.3) == 1, name + ": one hard cut, no flicker (" + juce::String (flips (s, 0.3, 5.3)) + " changes)");
+        check (rightFraction (s, 0.4, 2.6 - fade) > 0.95 && rightFraction (s, 3.0, 5.2) > 0.95, name + ": each side shows its own take in sync");
+        finish (*w);
+    }
+}
+
+// One take recorded while the DAW looped 2 seconds three times: the comp uses pass 1, then pass 3.
+void compLoopPasses()
+{
+    auto w = makeWorld (1);
+    auto& A = w->add (recordTake (*w->engine, 0, 6.0, performance (121, 6.0), 10.0, false, false, 2.0));
+    check (A.entry.meta.hostPieces.size() == 3, "the take knows its 3 passes (" + juce::String ((int) A.entry.meta.hostPieces.size()) + ")");
+    keepAndLoad (*w, 0, A);
+
+    Timeline tl (1);
+    tl.clips[0].push_back (Clip::place (A, 10.0, 0.0, 1.0)); // pass 1, first second
+    auto p3 = Clip::place (A, 11.0, 5.0, 1.0);               // pass 3, second second: take time 5 at host 11
+    tl.clips[0].push_back (p3);
+    const auto s = observe (*w, tl, { { Event::loopOn, 0.0, 10.0, 12.0 }, { Event::seek, 0.0, 9.9 }, { Event::play, 0.0 } }, 9.9, 6.3, 0);
+
+    // Every wrap: pass 1 for a second, then pass 3. Frames carry the take time, so the error says which pass is shown.
+    double worst = 1.0;
+    for (int lap = 0; lap < 3; ++lap)
+    {
+        const auto base = 0.1 + 2.0 * lap;
+        worst = std::min ({ worst, rightFraction (s, base + 0.3, base + 1.0), rightFraction (s, base + 1.25, base + 2.0) });
+    }
+    check (worst > 0.9, "each piece shows its own pass in sync, lap after lap (worst " + juce::String (worst * 100.0, 0) + " percent)");
+    finish (*w);
+}
+
+// A piece of take B moved away from where it was recorded, over a stretch where A was recorded.
+void compMoved()
+{
+    auto w = makeWorld (1);
+    auto& A = w->add (recordTake (*w->engine, 0, 5.0, performance (131), 10.0));
+    auto& B = w->add (recordTake (*w->engine, 0, 5.0, performance (132), 10.0));
+    keepAndLoad (*w, 0, B);
+
+    Timeline tl (1);
+    tl.clips[0].push_back (Clip::place (A, 10.0, 0.0, 2.5));
+    tl.clips[0].push_back (Clip::place (B, 12.5, 0.3, 2.5)); // B's 0.3 to 2.8 s, played 2.2 s later than recorded
+    const auto s = observe (*w, tl, { { Event::seek, 0.0, 9.8 }, { Event::play, 0.0 } }, 9.8, 5.4, 0);
+
+    check (rightFraction (s, 0.4, 2.7) > 0.95, "the unmoved piece of A plays in sync");
+    const auto lock = lockTime (s, 2.7);
+    metric ("moved piece found after", lock * 1000.0, "ms");
+    check (lock >= 0.0 && lock < 1.0, "the moved piece of B is found within 1 s (" + juce::String (lock, 3) + " s)");
+    check (rightFraction (s, 2.7 + std::max (lock, 0.0) + 0.1, 5.2) > 0.95, "and then plays in sync");
+    finish (*w);
+}
+
+// No clip for a second in the middle of a comp: black, then the next take on its first sound.
+void compGap()
+{
+    auto w = makeWorld (1);
+    auto& A = w->add (recordTake (*w->engine, 0, 5.0, performance (141), 10.0));
+    auto& B = w->add (recordTake (*w->engine, 0, 5.0, performance (142), 10.0));
+    keepAndLoad (*w, 0, B);
+
+    Timeline tl (1);
+    tl.clips[0].push_back (Clip::place (A, 10.0, 0.0, 2.0));
+    tl.clips[0].push_back (Clip::place (B, 13.0, 3.0, 2.0));
+    const auto s = observe (*w, tl, { { Event::seek, 0.0, 9.8 }, { Event::play, 0.0 }, { Event::pause, 4.3 } }, 9.8, 5.0, 0);
+
+    int n = 0;
+    const auto black = countIf (s, 2.45, 3.15, [] (const Sample& x) { return x.gap && x.black; }, &n);
+    check (n > 0 && black == n, "the gap goes black (" + juce::String (black) + "/" + juce::String (n) + ")");
+    const auto early = countIf (s, 2.2, 2.33, [] (const Sample& x) { return x.black; });
+    check (early == 0, "not before 150 ms of silence");
+    const auto t = switchTime (s, 3.2, B.label());
+    metric ("gap left after", t * 1000.0, "ms");
+    check (t >= 0.0 && t < 0.15, "the next take shows on its first sound (" + juce::String (t, 3) + " s)");
+    check (rightFraction (s, 0.4, 2.15) > 0.95 && rightFraction (s, 3.4, 4.25) > 0.95, "both pieces play in sync");
+    const auto stoppedBlack = countIf (s, 4.45, 5.0, [] (const Sample& x) { return x.black; });
+    check (stoppedBlack == 0, "stopped in a clip: never black");
+    finish (*w);
+}
+
+// Playing on past the end of the only take: black instead of the last frame.
+void compEnd()
+{
+    auto w = makeWorld (1);
+    auto& A = w->add (recordTake (*w->engine, 0, 5.0, performance (151), 10.0));
+    keepAndLoad (*w, 0, A);
+
+    Timeline tl (1);
+    tl.clips[0].push_back (Clip::place (A, 10.0, 0.0, 5.0));
+    const auto s = observe (*w, tl, { { Event::seek, 0.0, 13.0 }, { Event::play, 0.0 }, { Event::pause, 3.6 } }, 13.0, 4.4, 0);
+
+    check (rightFraction (s, 0.3, 1.95) > 0.95, "the take plays in sync up to its end");
+    int n = 0;
+    const auto black = countIf (s, 2.25, 3.55, [] (const Sample& x) { return x.black && x.status == SyncStatus::held; }, &n);
+    check (n > 0 && black == n, "after the end it goes black and says held (" + juce::String (black) + "/" + juce::String (n) + ")");
+    check (countIf (s, 3.8, 4.4, [] (const Sample& x) { return x.black; }) == 0, "stopped after the end: a frame, not black");
+    finish (*w);
+}
+
+// Take B was silent from 2 to 3 s (the singer rested in that take). The comp plays A, then B from 2 s.
+void compSilentTake()
+{
+    auto w = makeWorld (1);
+    auto& A = w->add (recordTake (*w->engine, 0, 5.0, performance (161), 10.0));
+    auto perfB = performance (162);
+    for (size_t i = (size_t) (2.0 * SR); i < (size_t) (3.0 * SR); ++i)
+        perfB[i] = 0.0f;
+    auto& B = w->add (recordTake (*w->engine, 0, 5.0, perfB, 10.0));
+    keepAndLoad (*w, 0, B);
+
+    Timeline tl (1);
+    tl.clips[0].push_back (Clip::place (A, 10.0, 0.0, 2.0));
+    tl.clips[0].push_back (Clip::place (B, 12.0, 2.0, 3.0));
+    const auto s = observe (*w, tl, { { Event::seek, 0.0, 9.8 }, { Event::play, 0.0 } }, 9.8, 5.3, 0);
+
+    if (getenv ("GRIDDY_DEBUG"))
+        for (const auto& x : s)
+            if (x.black && x.t > 2.2 && x.t < 5.2)
+                say ("   black at t " + juce::String (x.t, 3) + " host " + juce::String (x.host, 3) + " gap " + juce::String ((int) x.gap) + " status " + juce::String ((int) x.status));
+    check (countIf (s, 2.2, 5.2, [] (const Sample& x) { return x.black; }) == 0, "never black where a take's own audio is silent");
+    const auto right = rightFraction (s, 2.5, 3.15);
+    check (right > 0.9, "the silent piece shows the take that was silent there (" + juce::String (right * 100.0, 0) + " percent)");
+    check (rightFraction (s, 3.4, 5.1) > 0.95, "and it carries on in sync when its sound comes back");
+    finish (*w);
+}
+
+// A slot no Griddy owns only follows the position: no black, no comps (the leader feeds it silence).
+void compUnowned()
+{
+    auto w = makeWorld (1);
+    auto& A = w->add (recordTake (*w->engine, 0, 5.0, performance (171), 10.0));
+    w->add (recordTake (*w->engine, 0, 5.0, performance (172), 10.0));
+    keepAndLoad (*w, 0, A);
+    w->engine->setGapsAllowed (0, false);
+
+    Timeline tl (1);
+    auto c = Clip::place (A, 10.0, 0.0, 5.0);
+    c.gain = 0.0f; // what an unowned slot hears
+    tl.clips[0].push_back (c);
+    const auto s = observe (*w, tl, { { Event::seek, 0.0, 13.0 }, { Event::play, 0.0 } }, 13.0, 4.0, 0);
+
+    check (countIf (s, 0.2, 4.0, [] (const Sample& x) { return x.black || x.gap; }) == 0, "never black");
+    int n = 0;
+    const auto held = countIf (s, 2.3, 4.0, [] (const Sample& x) { return x.shown && x.status == SyncStatus::held; }, &n);
+    check (n > 0 && held == n, "past the end it holds the last frame, as before (" + juce::String (held) + "/" + juce::String (n) + ")");
+    finish (*w);
+}
+
+// 9 slots with 20 takes each and comps playing, while 2 slots record: no camera frame may be lost.
+void compRecordingLoad()
+{
+    auto w = makeWorld (9);
+    std::vector<std::vector<Recorded*>> takes (9);
+    for (int slot = 0; slot < 9; ++slot)
+        for (int i = 0; i < 20; ++i)
+            takes[(size_t) slot].push_back (&w->add (fakeTake (*w->engine, slot, performance ((unsigned) (1000 + slot * 20 + i), 4.0), 10.0)));
+    for (int slot = 0; slot < 9; ++slot)
+        w->engine->reloadSlot (slot);
+
+    Timeline tl (9);
+    for (int slot = 0; slot < 7; ++slot)
+        for (int k = 0; k < 8; ++k)
+            tl.clips[(size_t) slot].push_back (Clip::place (*takes[(size_t) slot][(size_t) ((k * 7 + slot) % 20)], 10.0 + 0.5 * k, 0.5 * k, 0.5));
+
+    w->engine->setRecordingActive (true);
+    w->engine->setGapsAllowed (7, false);
+    w->engine->setGapsAllowed (8, false);
+    Recorded r7, r8;
+    std::thread t7 ([&] { r7 = recordTake (*w->engine, 7, 4.5, performance (2001), 10.0); });
+    std::thread t8 ([&] { r8 = recordTake (*w->engine, 8, 4.5, performance (2002), 10.0); });
+    const auto cpu0 = processCpuSeconds();
+    const auto s = observe (*w, tl, { { Event::seek, 0.0, 9.9 }, { Event::play, 0.0 } }, 9.9, 4.2, 0);
+    const auto cpu = processCpuSeconds() - cpu0;
+    t7.join();
+    t8.join();
+    w->engine->setRecordingActive (false);
+
+    metric ("process CPU while 2 slots record and 7 play comps", cpu / 4.2 * 100.0, "percent of one core");
+    check (r7.dropped == 0 && r8.dropped == 0, "both recordings keep every camera frame (dropped " + juce::String ((int) r7.dropped) + " and " + juce::String ((int) r8.dropped) + ")");
+    check (r7.entry.meta.numFrames > 100 && r8.entry.meta.numFrames > 100, "both recordings wrote their frames");
+    const auto right = rightAwayFromCuts (s, 0.1, 4.1, 0.2);
+    metric ("comp right under load, from 200 ms after each cut", right * 100.0, "percent");
+    metric ("comp right under load, everything", rightFraction (s, 0.1, 4.1, 100.0) * 100.0, "percent");
+    check (right > 0.9, "the comp on slot 1 still shows the right takes under load, from 200 ms after each cut (" + juce::String (right * 100.0, 0) + " percent)");
+    finish (*w);
+}
+
+// What recognising more takes costs: 9 slots with 1, 5, 10 and 20 takes each, comps playing on every slot.
+void compBench()
+{
+    for (int n : { 1, 5, 10, 20 })
+    {
+        const auto rss0 = rssMegabytes();
+        auto w = makeWorld (9);
+        std::vector<std::vector<Recorded*>> takes (9);
+        for (int slot = 0; slot < 9; ++slot)
+            for (int i = 0; i < n; ++i)
+                takes[(size_t) slot].push_back (&w->add (fakeTake (*w->engine, slot, performance ((unsigned) (3000 + slot * 20 + i), 4.0), 10.0)));
+
+        const auto r0 = juce::Time::getMillisecondCounterHiRes();
+        for (int slot = 0; slot < 9; ++slot)
+            w->engine->reloadSlot (slot);
+        const auto reloadMs = (juce::Time::getMillisecondCounterHiRes() - r0) / 9.0;
+        juce::Thread::sleep (300);
+        const auto rss = rssMegabytes() - rss0;
+
+        Timeline tl (9);
+        for (int slot = 0; slot < 9; ++slot)
+            for (int k = 0; k < 8; ++k)
+                tl.clips[(size_t) slot].push_back (Clip::place (*takes[(size_t) slot][(size_t) ((k * 7 + slot) % n)], 10.0 + 0.5 * k, 0.5 * k, 0.5));
+
+        const auto cpu0 = processCpuSeconds();
+        double aligned0 = 0.0;
+        for (int slot = 0; slot < 9; ++slot)
+            aligned0 += w->engine->alignedCpuSeconds (slot);
+        const auto s = observe (*w, tl, { { Event::seek, 0.0, 9.9 }, { Event::play, 0.0 } }, 9.9, 4.0, 0);
+        const auto cpu = processCpuSeconds() - cpu0;
+        double aligned = -aligned0;
+        for (int slot = 0; slot < 9; ++slot)
+            aligned += w->engine->alignedCpuSeconds (slot);
+
+        const auto tag = juce::String (n) + (n == 1 ? " take" : " takes") + " per slot, 9 slots";
+        metric ("process CPU, " + tag, cpu / 4.0 * 100.0, "percent of one core");
+        metric ("comp detection CPU, " + tag, aligned / 4.0 * 100.0, "percent of one core");
+        metric ("memory added, " + tag, rss, "MB");
+        metric ("slot reload, " + tag, reloadMs, "ms");
+        if (n > 1)
+        {
+            metric ("comp right from 200 ms after each cut, " + tag, rightAwayFromCuts (s, 0.1, 3.9, 0.2) * 100.0, "percent");
+            metric ("comp right including the cuts, " + tag, rightFraction (s, 0.1, 3.9, 100.0) * 100.0, "percent");
+        }
+        finish (*w);
+    }
+}
+
 //==============================================================================
 // Soak and benchmarks
 
 double processCpuSeconds()
 {
-#if JUCE_LINUX
+#if JUCE_LINUX || JUCE_MAC
     rusage u {};
     getrusage (RUSAGE_SELF, &u);
     return (double) u.ru_utime.tv_sec + (double) u.ru_utime.tv_usec * 1.0e-6 + (double) u.ru_stime.tv_sec + (double) u.ru_stime.tv_usec * 1.0e-6;
@@ -1034,7 +1483,13 @@ double processCpuSeconds()
 
 double rssMegabytes()
 {
-#if JUCE_LINUX
+#if JUCE_MAC
+    mach_task_basic_info info {};
+    mach_msg_type_number_t count = MACH_TASK_BASIC_INFO_COUNT;
+    if (task_info (mach_task_self(), MACH_TASK_BASIC_INFO, (task_info_t) &info, &count) == KERN_SUCCESS)
+        return (double) info.resident_size / 1048576.0;
+    return 0.0;
+#elif JUCE_LINUX
     juce::File f ("/proc/self/statm");
     const auto parts = juce::StringArray::fromTokens (f.loadFileAsString(), " ", "");
     return parts.size() > 1 ? (double) parts[1].getLargeIntValue() * (double) sysconf (_SC_PAGESIZE) / 1048576.0 : 0.0;
@@ -1645,6 +2100,16 @@ int main (int argc, char** argv)
         { "identical_takes", identicalTakes, true },
         { "warped", warpedClip, true },
         { "embedded", embeddedSync, true },
+        { "comp_aligned", compAligned, true },
+        { "comp_crossfade", compCrossfade, true },
+        { "comp_loop_passes", compLoopPasses, true },
+        { "comp_moved", compMoved, true },
+        { "comp_gap", compGap, true },
+        { "comp_end", compEnd, true },
+        { "comp_silent_take", compSilentTake, true },
+        { "comp_unowned", compUnowned, true },
+        { "comp_recording_load", compRecordingLoad, true },
+        { "comp_bench", compBench, true },
         { "bench", bench, true },
         { "gpu", gpuCompositor, true },
         { "mov_export", movExport, true },
