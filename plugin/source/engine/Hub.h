@@ -60,6 +60,7 @@ struct Member
     std::atomic<bool> wantRecording { false };
     std::atomic<bool> playing { false };
     std::atomic<bool> hostRecording { false };
+    std::atomic<bool> hostRecordSeen { false }; // audio thread sets, logTransport clears: a record flag shorter than a control tick still shows in the log
 
     // Control thread -> audio thread. In DAW plays and Armed a take is one shot: once it ends, nothing
     // records until arm goes off and on again, so pressing play again plays the take instead of replacing it.

@@ -629,6 +629,8 @@ void Hub::processBlock (Member& member, const juce::AudioBuffer<float>& buffer, 
     member.wantRecording.store (want, std::memory_order_release);
     member.playing.store (t.isPlaying, std::memory_order_relaxed);
     member.hostRecording.store (t.isRecording, std::memory_order_relaxed);
+    if (t.isRecording)
+        member.hostRecordSeen.store (true, std::memory_order_relaxed);
 
     // The master instance hears the mix; while an export runs it hands that to the exporter.
     if (member.isMaster.load (std::memory_order_relaxed))
@@ -741,9 +743,13 @@ void Hub::logTransport (Member& m, PlaybackEngine* e)
                + names[juce::jlimit (0, 5, (int) shown->status)] + ")";
     };
 
+    // Whether Live sends its record flag at all is the open question, so log every sign of it, however short.
+    if (m.hostRecordSeen.exchange (false) && ! recording && ! l.recording)
+        log (who + "the DAW's record flag was on for less than a control tick" + where);
+
     if (! l.valid || playing != l.playing || recording != l.recording || looping != l.looping || armed != l.armed || mode != l.mode)
     {
-        log (who + (playing ? "playing" : "stopped") + (recording ? ", DAW recording" : "") + (looping ? ", loop on" : "")
+        log (who + (playing ? "playing" : "stopped") + (recording ? ", DAW recording" : ", DAW not recording") + (looping ? ", loop on" : "")
              + (armed ? ", armed" : "") + ", record when " + juce::String (mode) + where + picture());
         l = { true, playing, recording, looping, armed, mode, sample, now, false,
               shown != nullptr ? shown->takeId : -1, shown != nullptr ? shown->frameIndex : -1, now, false };
