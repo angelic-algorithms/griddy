@@ -56,6 +56,8 @@ export type TakeInfo = {
   latencyMs?: number;
   /** False past the recognition cap: the take is kept and restorable, but its video no longer follows comps. */
   recognised?: boolean;
+  /** The track whose audio the take listened to, when the host named it. */
+  heard?: string;
 };
 
 export type SlotInfo = {
@@ -71,6 +73,8 @@ export type SlotInfo = {
   trackName?: string;
   armed?: boolean;
   review?: boolean;
+  /** No clip plays here: the picture is black. */
+  gap?: boolean;
 };
 
 /** One cell of the picture, 0..1 of the canvas, frame included. */

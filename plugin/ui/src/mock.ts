@@ -4,8 +4,8 @@
 import { TEMPLATES } from "./kit";
 
 type Listener = (payload: unknown) => void;
-type Take = { id: number; state: "kept" | "review" | "archived"; seconds: number; slip: number; hasMov: boolean; startPpq: number; bpm: number; timeSig: string; fps: number; latencyMs: number };
-type MockSlot = { claimed: boolean; name: string; armed: boolean; recording: boolean; recordStartPpq: number; takes: Take[] };
+type Take = { id: number; state: "kept" | "review" | "archived"; seconds: number; slip: number; hasMov: boolean; startPpq: number; bpm: number; timeSig: string; fps: number; latencyMs: number; recognised?: boolean; heard?: string };
+type MockSlot = { claimed: boolean; name: string; armed: boolean; recording: boolean; recordStartPpq: number; takes: Take[]; playingTake?: number; gap?: boolean };
 type ExportState = "idle" | "waiting" | "recording" | "writing" | "done" | "failed";
 type Store<T> = { get: () => T; set: (v: T) => void; subscribe: (fn: () => void) => () => void };
 
@@ -43,6 +43,8 @@ export const MOCK_SCENARIOS: MockScenario[] = [
   { id: "disarmed", label: "Disarmed after take" },
   { id: "recording", label: "Recording" },
   { id: "review", label: "Take in review" },
+  { id: "comp", label: "Comp playing" },
+  { id: "no-griddy", label: "No Griddy on this track" },
   { id: "master9", label: "Master, 3×3" },
   { id: "one", label: "One slot" },
   { id: "square", label: "Square, 1+5" },
@@ -181,6 +183,24 @@ export function createMock() {
       case "review":
         claim(0, { takes: [take(3, "review", 0, 8), take(2, "kept", 0, 8, 0.02), take(1, "archived", 0)] });
         claim(1, { takes: [take(4, "kept", 0)] });
+        break;
+      case "comp":
+        // Slot 1 plays a comp: an archived take is on screen now. Slot 2 is in a gap between clips. Slot 1 has 23 takes.
+        claim(0, {
+          playingTake: 21,
+          takes: [take(23, "kept", 0), take(22, "archived", 0), { ...take(21, "archived", 0), heard: "VOX DOUBLE" },
+            ...Array.from({ length: 20 }, (_, i) => ({ ...take(20 - i, "archived" as const, 0), recognised: i < 17 }))],
+        });
+        claim(1, { gap: true, takes: [take(30, "kept", 0), take(29, "archived", 0)] });
+        claim(2, { playingTake: 31, takes: [take(31, "kept", 0)] });
+        break;
+      case "no-griddy":
+        // The master Griddy shows two slots whose tracks have no Griddy: their takes follow Live's position only.
+        preset = 8;
+        for (let i = 0; i < 4; i++) claim(i, { takes: [take(60 + i, "kept", 0)] });
+        Object.assign(slots[2], { claimed: false, name: "" });
+        Object.assign(slots[3], { claimed: false, name: "" });
+        masterParam()?.set(true);
         break;
       case "master9":
         preset = 12;
@@ -388,8 +408,8 @@ export function createMock() {
       recordHint: me >= 0 && slots[me]?.armed && !slots[me]?.recording && !playing ? `Armed. Press play in Live to record slot ${me + 1}.` : "",
       claimedMask: slots.reduce((m, x, i) => (x.claimed ? m | (1 << i) : m), 0),
       slots: slots.slice(0, panels).map((x, slot) => ({
-        slot, claimed: x.claimed, recording: x.recording, status: x.takes.some((t) => t.state === "kept") ? "locked" : "noTake",
-        source: x.takes.length ? "fingerprint" : "none", takeId: x.takes.find((t) => t.state === "kept")?.id ?? -1, warp: false, lockMs: 180,
+        slot, claimed: x.claimed, recording: x.recording, status: !x.takes.some((t) => t.state === "kept") ? "noTake" : x.claimed ? "locked" : "prior",
+        source: !x.takes.length ? "none" : x.claimed ? "fingerprint" : "hostPosition", takeId: x.playingTake ?? x.takes.find((t) => t.state === "kept")?.id ?? -1, gap: !!x.gap, warp: false, lockMs: 180,
         recordStartPpq: x.recordStartPpq, trackName: x.name, armed: x.armed, review: x.takes.some((t) => t.state === "review"),
       })),
       takes: slots.slice(0, panels).map((x) => x.takes),
@@ -427,7 +447,8 @@ export function createMock() {
       const x = c.x * canvas.width, y = c.y * canvas.height, cw = c.w * canvas.width, ch = c.h * canvas.height;
       const sl = slots[c.slot];
       const has = sl && (sl.takes.some((t) => t.state !== "archived") || sl.armed || sl.recording);
-      g.fillStyle = has ? `hsl(${(c.slot * 47 + 20) % 360} 45% ${beat % panelsOf() === i ? 46 : 34}%)` : "#141418";
+      const hue = (sl?.playingTake ?? c.slot) * 47 + 20;
+      g.fillStyle = sl?.gap && playing ? "#000" : has ? `hsl(${hue % 360} 45% ${beat % panelsOf() === i ? 46 : 34}%)` : "#141418";
       g.beginPath();
       g.roundRect(x, y, cw, ch, Math.min(r, cw / 2, ch / 2));
       g.fill();

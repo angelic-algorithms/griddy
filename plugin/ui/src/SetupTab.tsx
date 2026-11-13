@@ -2,7 +2,7 @@
 import { api, EngineStatus, params, Status } from "./bridge";
 import { useParam } from "./hooks";
 import { Btn, Label } from "./kit";
-import { SlotView } from "./model";
+import { FOLLOWS_POSITION, SlotView } from "./model";
 import { AskFirst, ResetSlot } from "./Recover";
 import { SyncChip } from "./SlotTab";
 
@@ -76,6 +76,7 @@ export function SetupTab({ engine, status, views, say }: { engine: EngineStatus;
                 <span className="truncate" style={{ fontWeight: 700, textTransform: "uppercase", fontSize: 13, maxWidth: 110 }}>{v.claimed ? v.name : "No track"}</span>
                 <SyncChip slot={v.info} />
                 <span style={{ marginLeft: "auto" }}><ResetSlot slot={v.slot} onDone={() => say(`Slot ${v.slot + 1} reset`)} /></span>
+                {!v.follows && v.takes.length > 0 && <p className="small-note" style={{ margin: 0, flexBasis: "100%" }}>{FOLLOWS_POSITION}</p>}
               </li>
             ))}
           </ul>

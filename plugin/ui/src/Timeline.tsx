@@ -75,6 +75,15 @@ export function Timeline({ views, transport, selected, onSelect }: {
                     </span>
                   </div>
                 )}
+                {v.playing !== undefined && (
+                  <span
+                    role="status"
+                    aria-label={v.playing === "gap" ? `Slot ${v.slot + 1} has no clip here` : `Slot ${v.slot + 1} is showing take ${v.playing}`}
+                    style={{ position: "absolute", top: 5, left: pct(transport.ppq), marginLeft: 5, zIndex: 1, fontWeight: 800, fontSize: 10, lineHeight: "14px", padding: "0 4px", border: "1px solid #000", background: v.playing === "gap" ? "#000" : "var(--paper)", color: v.playing === "gap" ? "var(--paper)" : "var(--ink)", whiteSpace: "nowrap" }}
+                  >
+                    {v.playing === "gap" ? "NO CLIP" : `TAKE ${v.playing}`}
+                  </span>
+                )}
                 {v.recording && (
                   <div className="stripes-rec" style={{ position: "absolute", top: 3, bottom: 3, border: "2px solid #000", left: pct(v.info?.recordStartPpq ?? 0), width: pct(Math.max(0, transport.ppq - (v.info?.recordStartPpq ?? 0))) }} />
                 )}

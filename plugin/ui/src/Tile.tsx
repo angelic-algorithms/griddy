@@ -1,7 +1,7 @@
 // One cell of the grid, laid over the real picture: the mockup's Tile, state by state.
 import { Transport } from "./bridge";
 import { Btn, C, clamp, fmtMs, meter, Sticker, Wave } from "./kit";
-import { badgeFor, countIn, SlotView, takeProgress, usePeaks } from "./model";
+import { badgeFor, countIn, playingChip, SlotView, takeProgress, usePeaks } from "./model";
 
 export type Density = "full" | "compact" | "tiny";
 
@@ -36,6 +36,7 @@ export function Tile({ v, density, selected, transport, master, onSelect, onKeep
   const prevMuted = (v.armed || v.recording) && !!v.kept;
   const count = v.waiting ? countIn(transport) : 0;
   const frameMs = 1000 / (v.review?.fps || 30);
+  const chip = playingChip(v);
 
   return (
     <div
@@ -99,6 +100,11 @@ export function Tile({ v, density, selected, transport, master, onSelect, onKeep
         >
           {badge.t}
         </span>
+        {chip && (
+          <span role="status" aria-label={chip.label} style={{ ...tag(chip.text === "NO CLIP" ? "#d8d6cc" : C.paper), fontSize: tiny ? 9 : 11, border: "2px solid #000" }}>
+            {chip.text}
+          </span>
+        )}
         {prevMuted && !compact && <span style={tag(C.gold)}>Previous take muted</span>}
         {v.shown && v.shown.slip !== 0 && !v.live && !tiny && <span style={tag(C.sky)}>Slip {fmtMs(v.shown.slip * 1000)}</span>}
       </div>

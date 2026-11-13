@@ -25,6 +25,10 @@ export type SlotView = {
   empty: boolean;
   info?: SlotInfo;
   takes: TakeInfo[];
+  /** While Live plays a take back: the take the picture shows now (a comp can switch it), or "gap" where no clip plays. */
+  playing?: number | "gap";
+  /** A Griddy owns this slot, so the slot hears its track and follows edits and comps. */
+  follows: boolean;
 };
 
 export function slotViews(engine: EngineStatus | undefined, transport: Transport): SlotView[] {
@@ -42,6 +46,9 @@ export function slotViews(engine: EngineStatus | undefined, transport: Transport
     const live = recording || (armed && !review);
     const waiting = armed && !recording && transport.ppq < 0;
     const claimed = slot === own || !!info?.claimed;
+    const playing = transport.playing && !live && (review || kept) && info
+      ? (info.gap ? "gap" as const : info.takeId >= 0 ? info.takeId : undefined)
+      : undefined;
     return {
       slot,
       color: slotColor(slot),
@@ -58,8 +65,20 @@ export function slotViews(engine: EngineStatus | undefined, transport: Transport
       empty: !review && !kept && !live,
       info,
       takes,
+      playing,
+      follows: claimed,
     };
   });
+}
+
+/** The words for a slot whose takes play but no Griddy hears its track. */
+export const FOLLOWS_POSITION = "Follows Live's position. Put Griddy on this track to follow edits and comps.";
+
+/** What a tile's chip says, and what a screen reader hears. */
+export function playingChip(v: SlotView): { text: string; label: string } | undefined {
+  if (v.playing === undefined) return undefined;
+  if (v.playing === "gap") return { text: "NO CLIP", label: `Slot ${v.slot + 1} has no clip here` };
+  return { text: `TAKE ${v.playing}`, label: `Slot ${v.slot + 1} is showing take ${v.playing}` };
 }
 
 /** The status badge, in the mockup's words and colours. */

@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { api, Device, EngineStatus, params, SlotInfo, TakeInfo } from "./bridge";
 import { useParam } from "./hooks";
 import { Btn, C, fmtFrames, fmtMs, Label, Sticker } from "./kit";
-import { SlotView } from "./model";
+import { FOLLOWS_POSITION, SlotView } from "./model";
 import { ResetSlot } from "./Recover";
 
 const MESSAGES = {
@@ -49,18 +49,24 @@ function seconds(s: number) {
   return `${m}:${(s - m * 60).toFixed(1).padStart(4, "0")}`;
 }
 
-function TakeRow({ slot, take, onKeep, onRetake }: { slot: number; take: TakeInfo; onKeep: () => void; onRetake: () => void }) {
+function TakeRow({ slot, take, playing, track, onKeep, onRetake }: { slot: number; take: TakeInfo; playing: boolean; track: string; onKeep: () => void; onRetake: () => void }) {
   const nudge = (ms: number) => api.setSlip(slot, take.id, Math.max(-0.5, Math.min(0.5, take.slip + ms / 1000)));
   return (
     <li className="take-row stack" style={{ gap: 6 }}>
       <div className="row" style={{ gap: 8 }}>
         <span style={{ fontWeight: 800, fontSize: 15, textTransform: "uppercase" }}>Take {take.id}</span>
         <span className="small-note num">{seconds(take.seconds)}</span>
+        {playing && (
+          <span role="status" aria-label={`Slot ${slot + 1} is showing take ${take.id}`} style={{ fontWeight: 800, fontSize: 11, textTransform: "uppercase", padding: "2px 5px", lineHeight: 1, border: "2px solid #000", background: C.ink, color: C.paper }}>
+            Playing
+          </span>
+        )}
         <span style={{ marginLeft: "auto", fontWeight: 800, fontSize: 12, textTransform: "uppercase", padding: "3px 6px", lineHeight: 1, border: "2px solid #000", background: stateColor[take.state], boxShadow: "2px 2px 0 #000" }}>
           {stateWords[take.state]}
         </span>
       </div>
       {take.recognised === false && <span className="small-note">Too old to follow comps</span>}
+      {!!take.heard && take.heard !== track && <span className="small-note">This take listened to {take.heard}. It follows edits on that track.</span>}
       <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
         {take.state === "review" && (
           <>
@@ -222,11 +228,14 @@ export function SlotTab({ engine, views, slot, camerasAllowed, onKeep, onRetake,
           <Label>Takes in slot {slot + 1}</Label>
           <SyncChip slot={v.info} />
         </div>
+        {!v.follows && v.takes.length > 0 && <p className="small-note" style={{ margin: "0 0 6px" }}>{FOLLOWS_POSITION}</p>}
         {v.takes.length === 0 ? (
           <p className="small-note" style={{ margin: 0 }}>Arm, then record in Live. Each take lands here for you to keep or redo.</p>
         ) : (
           <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
-            {(showAll ? v.takes : v.takes.slice(0, LISTED)).map((t) => <TakeRow key={t.id} slot={slot} take={t} onKeep={() => onKeep(slot)} onRetake={() => onRetake(slot)} />)}
+            {(showAll ? v.takes : v.takes.slice(0, LISTED)).map((t) => (
+              <TakeRow key={t.id} slot={slot} take={t} playing={v.playing === t.id} track={v.info?.trackName ?? ""} onKeep={() => onKeep(slot)} onRetake={() => onRetake(slot)} />
+            ))}
           </ul>
         )}
         {v.takes.length > LISTED && (
