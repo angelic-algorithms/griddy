@@ -34,7 +34,9 @@ The ideas, from first principles:
 | --- | --- |
 | Cameras (slots) | 1 to 9 |
 | Record arm | on, off |
-| Record when | DAW records, DAW plays (default), Armed. In DAW plays and Armed a take is one shot: arm switches off when it ends |
+| Record when (not used) | kept only so older sets load; its value is ignored |
+
+To record, click **Rec** in Griddy and press play in Live. That records one take, and Rec switches off when it ends, so the next play plays the take back. Live's own record button and track arm make no difference to Griddy: Live does not tell a plugin about either.
 
 Which camera sits in which slot, the takes folder and the session are saved with your DAW project. A saved project reopens its own takes; a new set, a set made from a template and a copied project each start a session of their own (see "Sessions" in `docs/engine-design.md`). The drawer shows which session folder is in use, with **New session** to start an empty one, and each slot has **Reset slot** to get back to the live camera. Neither deletes anything.
 

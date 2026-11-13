@@ -260,6 +260,5 @@ export const params = {
   master: boolParam("master"),
   numSlots: intParam("numSlots", 1, 9, 4),
   recordArm: boolParam("recordArm"),
-  recordMode: choiceParam("recordMode", ["DAW records", "DAW plays", "Armed"], 1),
 };
 

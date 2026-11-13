@@ -16,20 +16,6 @@ function MasterToggle() {
   );
 }
 
-function RecordWhen() {
-  const index = useParam(params.recordMode);
-  const labels = ["DAW records", "DAW plays", "Armed only"];
-  return (
-    <div className="row" role="radiogroup" aria-label="Record when" style={{ gap: 8, flexWrap: "wrap" }}>
-      {params.recordMode.choices().map((choice, i) => (
-        <Btn key={choice} small color={i === index ? "lime" : "bone"} pressed={i === index} onClick={() => params.recordMode.set(i)}>
-          {labels[i] ?? choice}
-        </Btn>
-      ))}
-    </div>
-  );
-}
-
 export function SetupTab({ engine, status, views, say }: { engine: EngineStatus; status: Status; views: SlotView[]; say: (t: string) => void }) {
   return (
     <div className="stack" style={{ gap: 20 }}>
@@ -40,13 +26,6 @@ export function SetupTab({ engine, status, views, say }: { engine: EngineStatus;
           <span className="small-note">{engine.instances} {engine.instances === 1 ? "track" : "tracks"} in this set</span>
         </div>
       </div>
-
-      {!engine.master && (
-        <div>
-          <Label>Record when</Label>
-          <RecordWhen />
-        </div>
-      )}
 
       <div>
         <Label>Session</Label>

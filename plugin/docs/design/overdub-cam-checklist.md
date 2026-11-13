@@ -22,7 +22,7 @@ Also changed: a new set starts like the mockup, an orange frame 6 thick with cor
 ## 2. Header
 - 2.0 Header padding and gaps, wraps when narrow: done
 - 2.1 Logo and OVERDUB CAM sticker: done
-- 2.2 Transport group, order, colours, sizes: done with a difference: Stop and Play show Live's state and are disabled (Use Live's transport); Rec arms this track and is hidden in the master; Loop shows only when Live reports loop points; Count in is hidden because JUCE does not report it
+- 2.2 Transport group, order, colours, sizes: done with a difference: Stop and Play show Live's state and are disabled (Use Live's transport); Rec arms this track for one take (the next play records it) and is hidden in the master; Loop shows only when Live reports loop points; Count in is hidden because JUCE does not report it
 - 2.3 Counter and BPM chip from the host: done
 - 2.4 Export MP4 button opens the sheet: done
 
@@ -40,7 +40,7 @@ Also changed: a new set starts like the mockup, an orange frame 6 thick with cor
 - 4.5 Active ring armed and recording: done
 - 4.6 Top left number sticker and track name: done
 - 4.7 Top right badges, shortened words, previous take muted, slip: done
-- 4.8 Waiting overlay with countdown: done with a difference: GET READY shows while armed and Live plays without recording; there is no countdown because JUCE does not report Live's count in
+- 4.8 Waiting overlay with countdown: done with a difference: GET READY with a beat countdown shows only while armed and Live reports a position before the song start (its count in). Whether Live reports that is unverified; armed plus play otherwise records at once
 - 4.9 Bottom strip: waveform, recording bar, Keep, Retake, slip group: done with a difference: without a host loop the recording bar fills through each bar
 - 4.10 Tile selection by click, Enter, Space; aria label: done
 
@@ -81,7 +81,7 @@ Also changed: a new set starts like the mockup, an orange frame 6 thick with cor
 - 6c.2 Text and meters per slot: done with a difference: the text says the meters read where Griddy sits on the track, before the track's fader, because that is what they measure
 
 ### 6d. Setup tab
-- 6d.1 Master, Slots count, Record when, Session, Takes folder, Every slot: done with a difference: the Slots count stepper is gone, the template sets the count
+- 6d.1 Master, Slots count, Record when, Session, Takes folder, Every slot: done with a difference: the Slots count stepper is gone, the template sets the count; Record when is gone, see Recording below
 
 ## 7. Export sheet
 - 7.0 Dialog look, Close, Escape, backdrop: done
@@ -96,8 +96,8 @@ Also changed: a new set starts like the mockup, an orange frame 6 thick with cor
 
 ## Mapping
 - M1 Instance types, claim on empty tile, toast for another track's slot: done
-- M2 Transport buttons show host state; Loop and Count in from the host or hidden; Rec is arm: done
-- M3 GET READY and countdown: done (no countdown, see 4.8)
+- M2 Transport buttons show host state; Loop and Count in from the host or hidden; Rec is arm: done; Rec arms one take
+- M3 GET READY and countdown: done, see 4.8
 - M4 Previous take muted: done
 - M5 No mixer labels or sends: done
 - M6 Status chips only with measured values: done
@@ -121,7 +121,7 @@ Also changed: a new set starts like the mockup, an orange frame 6 thick with cor
 - Cameras blocked banner: under the header
 - Record hint: chip under the grid
 - Sync chip with every status and the warp warning: Slot tab take list, Setup tab Every slot
-- Record when: Setup tab
+- Record when: removed; arm plus play records one take (see Recording below)
 - Slots count: replaced by the template (6d.1)
 - Layout shape, template, thickness, colour, cell swap: Look tab
 - Export: Export MP4 sheet
@@ -139,3 +139,10 @@ Also changed: a new set starts like the mockup, an orange frame 6 thick with cor
 - V3 VST3 build, GriddyTests, Harness, smoke test, UI typecheck and build: done; every Harness scenario passes except seek (2 checks), which fails the same way on 83b9bd9, before this work
 - V4 Install if Live is closed: todo
 - V5 What to click in Live, what is unverified: todo
+
+## Recording (after the Overdub Cam work)
+- Shipped: version B, one rule. Armed plus play in Live records one take, and the take switches arm off, so the next play plays it back.
+- Evidence: on 13 November a Live test with Arrangement Record, punch in and Session Record logged every transport change as "DAW not recording", and the check for a flag shorter than a control tick never fired. The earlier 1640 log lines had the flag 0 times. A plugin cannot see a Live track's arm (JUCE TrackProperties: name and colour; VST3 channel context: no arm key).
+- Hints: "Armed. Press play in Live to record slot N.", "Pick a camera for slot N in the Slot tab.", "Griddy's engine is not running yet."; none while recording or not armed.
+- Toasts: "Slot N recorded. Keep it or retake it." then "Slot N disarmed. Press Rec to record again."
+- Mock states: Armed, Live stopped; Armed, Live playing; Armed, Live recording; Count in; Disarmed after take. Screenshots: compare/record-*.jpg

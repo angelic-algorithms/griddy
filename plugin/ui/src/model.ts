@@ -14,7 +14,7 @@ export type SlotView = {
   mine: boolean;
   armed: boolean;
   recording: boolean;
-  /** Armed and waiting for its take to start (the host plays without the record trigger, or Live counts in). */
+  /** Armed and about to record: Live is counting in (a position before the song start). Armed plus play records at once. */
   waiting: boolean;
   review?: TakeInfo;
   kept?: TakeInfo;
@@ -40,7 +40,7 @@ export function slotViews(engine: EngineStatus | undefined, transport: Transport
     const recording = !!info?.recording;
     const armed = slot === own ? engine.armed : !!info?.armed;
     const live = recording || (armed && !review);
-    const waiting = armed && !recording && !review && (transport.playing || transport.ppq < 0);
+    const waiting = armed && !recording && transport.ppq < 0;
     const claimed = slot === own || !!info?.claimed;
     return {
       slot,

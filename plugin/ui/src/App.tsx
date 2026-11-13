@@ -36,15 +36,19 @@ export function App() {
 
   const [selected, setSelected] = useState(0);
   const [tab, setTab] = useState<Tab>("slot");
-  const [toast, setToast] = useState<string | null>(null);
+  const [toasts, setToasts] = useState<{ id: number; text: string }[]>([]);
+  const toastId = useRef(0);
   const [exportOpen, setExportOpen] = useState(false);
-  const toastTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const head = toasts[0];
+  const toast = head?.text ?? null;
 
-  const say = (text: string) => {
-    setToast(text);
-    clearTimeout(toastTimer.current);
-    toastTimer.current = setTimeout(() => setToast(null), 2200);
-  };
+  // Toasts queue, so "recorded" and "disarmed" after one take are both read, each for 2.2 s.
+  const say = (text: string) => setToasts((q) => (q[q.length - 1]?.text === text ? q : [...q, { id: ++toastId.current, text }]));
+  useEffect(() => {
+    if (!head) return;
+    const t = setTimeout(() => setToasts((q) => q.slice(1)), 2200);
+    return () => clearTimeout(t);
+  }, [head?.id]);
 
   const views = slotViews(engine, transport);
   const sel = Math.min(selected, Math.max(0, views.length - 1));
@@ -65,6 +69,20 @@ export function App() {
       seenReview.current.set(v.slot, id);
     }
   });
+
+  // A take ends the arm (one take per arm). Say so, so the next play playing back is no surprise.
+  const wasRecording = useRef(false);
+  const ownRecording = own >= 0 && !!engine?.recording;
+  useEffect(() => {
+    if (wasRecording.current && !ownRecording) {
+      const t = setTimeout(() => {
+        if (!params.recordArm.get()) say(`Slot ${own + 1} disarmed. Press Rec to record again.`);
+      }, 600);
+      wasRecording.current = false;
+      return () => clearTimeout(t);
+    }
+    wasRecording.current = ownRecording;
+  }, [ownRecording, own]);
 
   const keep = async (slot: number) => {
     const t = views[slot]?.review;
@@ -129,7 +147,7 @@ export function App() {
           </Btn>
           {!master && engine && (
             <Btn color="blood" onClick={() => params.recordArm.set(!armed)} pressed={armed} className={isRec ? "rec-pulse" : ""}
-              title="Arm this track's slot. Griddy records when Live does (R)">
+              title={`Arm slot ${own + 1}. The next play records one take. (R)`}>
               {isRec ? "● Stop rec" : "● Rec"}
             </Btn>
           )}

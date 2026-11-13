@@ -36,7 +36,11 @@ export type MockScenario = { id: string; label: string };
 export const MOCK_SCENARIOS: MockScenario[] = [
   { id: "mixed", label: "Four slots, mixed" },
   { id: "fresh", label: "Fresh session, stopped" },
-  { id: "ready", label: "Armed, get ready" },
+  { id: "armed-stopped", label: "Armed, Live stopped" },
+  { id: "armed-playing", label: "Armed, Live playing" },
+  { id: "armed-recording", label: "Armed, Live recording" },
+  { id: "countin", label: "Count in" },
+  { id: "disarmed", label: "Disarmed after take" },
   { id: "recording", label: "Recording" },
   { id: "review", label: "Take in review" },
   { id: "master9", label: "Master, 3×3" },
@@ -103,6 +107,9 @@ export function createMock() {
   let slots: MockSlot[] = [];
   let playing = true;
   let hostLoop = false;
+  // Live's record flag. Live never sends it to a plugin, so Griddy ignores it; the mock keeps it to show that.
+  let liveRecording = false;
+  let countInBeats = 0;
   let exportState: ExportState = "idle";
   let blocked = false;
   let lastError = "";
@@ -110,7 +117,7 @@ export function createMock() {
   let nextId = 20;
 
   const emptySlot = (): MockSlot => ({ claimed: false, name: "", armed: false, recording: false, recordStartPpq: 0, takes: [] });
-  const ppqNow = () => ((performance.now() - start) / 1000) * 2;
+  const ppqNow = () => (playing ? ((performance.now() - start) / 1000) * 2 - countInBeats : 0);
   const own = () => (masterParam()?.get() ? -1 : (slotParam()?.get() ?? 1) - 1);
   const panelsOf = () => TEMPLATES[preset].cells.length;
 
@@ -122,6 +129,8 @@ export function createMock() {
     layout = { canvas: 0, gap: 6, radius: 14, background: "ff6a1a", order: [0, 1, 2, 3, 4, 5, 6, 7, 8] };
     playing = true;
     hostLoop = false;
+    liveRecording = false;
+    countInBeats = 0;
     exportState = "idle";
     blocked = false;
     lastError = "";
@@ -137,10 +146,31 @@ export function createMock() {
         playing = false;
         start = performance.now();
         break;
-      case "ready":
-        claim(0, { takes: [take(1, "archived", 0)] });
+      case "armed-stopped":
+        claim(0, { takes: [take(1, "kept", 0)] });
         claim(1, { takes: [take(2, "kept", 0)] });
         armParam()?.set(true);
+        playing = false;
+        start = performance.now();
+        break;
+      case "armed-playing":
+      case "armed-recording":
+        claim(0, { takes: [take(1, "kept", 0)] });
+        claim(1, { takes: [take(2, "kept", 0)] });
+        armParam()?.set(true);
+        liveRecording = id === "armed-recording";
+        start = performance.now();
+        break;
+      case "countin":
+        claim(0, { takes: [take(1, "kept", 0)] });
+        claim(1, { takes: [take(2, "kept", 0)] });
+        armParam()?.set(true);
+        countInBeats = 8;
+        start = performance.now();
+        break;
+      case "disarmed":
+        claim(0, { takes: [take(3, "review", 0, 6), take(2, "kept", 0)] });
+        claim(1, { takes: [take(4, "kept", 0)] });
         break;
       case "recording":
         claim(0, { recording: true, recordStartPpq: 0, takes: [take(1, "kept", 0)] });
@@ -335,8 +365,16 @@ export function createMock() {
     const panels = panelsOf();
     // The track's own arm lives in the recordArm parameter; R and the Rec button move it.
     if (me >= 0 && slots[me]) {
+      // The one rule, as in the hub: armed plus play records one take, and the take ends the arm.
+      if (slots[me].recording && (!armParam()?.get() || !playing)) {
+        finishTake(me);
+        armParam()?.set(false);
+      }
       const armed = !!armParam()?.get();
-      if (!armed && slots[me].recording) finishTake(me);
+      if (armed && playing && !slots[me].recording && ppqNow() >= 0) {
+        slots[me].recording = true;
+        slots[me].recordStartPpq = Math.max(0, ppqNow());
+      }
       slots[me].armed = armed;
       slots[me].claimed = true;
       slots[me].name ||= NAMES[me];
@@ -345,7 +383,7 @@ export function createMock() {
     return {
       session, sessionFolder: `${outputFolder}/Sessions/${session}`, slot: Math.max(0, me), instances: slots.filter((x) => x.claimed).length + (me < 0 ? 1 : 0),
       recording, armed: me >= 0 && !!slots[me]?.armed, master: me < 0, error: "",
-      recordHint: me >= 0 && slots[me]?.armed && !playing ? "Armed. Griddy records when Live plays." : "",
+      recordHint: me >= 0 && slots[me]?.armed && !slots[me]?.recording && !playing ? `Armed. Press play in Live to record slot ${me + 1}.` : "",
       claimedMask: slots.reduce((m, x, i) => (x.claimed ? m | (1 << i) : m), 0),
       slots: slots.slice(0, panels).map((x, slot) => ({
         slot, claimed: x.claimed, recording: x.recording, status: x.takes.some((t) => t.state === "kept") ? "locked" : "noTake",
@@ -398,12 +436,12 @@ export function createMock() {
     queueMicrotask(() => applyScenario("mixed"));
     setInterval(() => {
       const seconds = (performance.now() - start) / 1000;
-      const ppq = playing ? seconds * 2 : 0;
+      const ppq = playing ? seconds * 2 - countInBeats : 0;
       const loopLen = 16;
       const shown = hostLoop ? ppq % loopLen : ppq;
       emit("transport", {
         bpm: 120, ppq: shown, bar: Math.floor(shown / 4) + 1, beat: Math.floor(shown % 4) + 1,
-        timeSig: "4/4", playing, recording: false, hostSync: true,
+        timeSig: "4/4", playing, recording: liveRecording, hostSync: true,
         looping: hostLoop, hasLoop: hostLoop, loopStart: 0, loopEnd: loopLen,
         levels: slots.slice(0, panelsOf()).map((x, i) => (x.claimed && playing ? 0.25 + 0.5 * Math.abs(Math.sin(seconds * (1.3 + i * 0.4))) : 0)),
       });
