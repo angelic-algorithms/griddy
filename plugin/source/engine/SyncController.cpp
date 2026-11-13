@@ -441,7 +441,14 @@ SlotTarget SyncController::update (double wallNow)
 
         const auto heard = placement.kind == SyncKind::fingerprint || placement.kind == SyncKind::embedded;
         const auto refLoud = heard && unclamped >= 0.0 && unclamped < take->durationSeconds && envelopeAt (*take, unclamped) > loudReference;
-        const auto gapNow = (longSilence && ! refQuiet && (! anyCovers || refLoud)) || stayInGap;
+
+        // Silence the take explained does not count: where its own sound comes back, the track lags a block or so.
+        if (refQuiet && digitalSilentSince >= 0.0)
+            takeQuietAt = wallNow;
+        const auto explained = takeQuietAt >= 0.0 && digitalSilentSince >= 0.0 && takeQuietAt >= digitalSilentSince
+                            && wallNow - takeQuietAt < gapAfter;
+
+        const auto gapNow = (longSilence && ! refQuiet && ! explained && (! anyCovers || refLoud)) || stayInGap;
 
         if (gapNow != inGap)
         {

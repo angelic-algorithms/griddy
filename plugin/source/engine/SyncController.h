@@ -146,6 +146,7 @@ private:
     int32_t alignedTake = -1;
     double alignedOffset = 0.0;
     double digitalSilentSince = -1.0, signalSince = -1.0;
+    double takeQuietAt = -1.0; // last time the playing take's own audio was silent where the track was silent
     bool inGap = false;
     int32_t loggedTake = -1;
     int16_t loggedPass = -1;
