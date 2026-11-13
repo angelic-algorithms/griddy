@@ -246,7 +246,8 @@ private:
 
     std::array<std::atomic<bool>, maxSlots> slotBusy;
     std::array<std::atomic<bool>, maxSlots> slotRecording;
-    std::array<std::atomic<double>, maxSlots> recordStartPpq {}; // where the take in progress began, for the takes timeline
+    std::array<std::atomic<double>, maxSlots> recordStartPpq {};
+    std::atomic<uint32_t> armedMask { 0 }; // slots whose track is armed, worked out with the claims // where the take in progress began, for the takes timeline
     std::array<std::atomic<bool>, maxSlots> resetRequested;
     std::array<std::atomic<uint64_t>, maxSlots> droppedFrames, droppedAudio;
 

@@ -112,6 +112,9 @@ public:
     /** True when fingerprint matching reports audio flowing that matches nothing. */
     bool slotLooksWarped (int slot) const { return slots[(size_t) slot]->fingerprint.noMatchWhileActive(); }
 
+    /** A take waits for Keep or Retake in this slot. Set by reloadSlot(). */
+    bool slotHasReview (int slot) const { return slots[(size_t) slot]->hasReview.load(); }
+
     SyncController& controller (int slot) { return slots[(size_t) slot]->controller; }
 
 private:
@@ -127,6 +130,7 @@ private:
         SlotPlayer player;
 
         std::map<int32_t, std::shared_ptr<const fingerprint::Index>> indexCache;
+        std::atomic<bool> hasReview { false };
         // Drift as a histogram (0.25 ms bins up to 500 ms), so a long run uses constant memory.
         std::vector<uint32_t> driftBins = std::vector<uint32_t> (2001, 0);
         uint64_t driftCount = 0;

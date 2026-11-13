@@ -89,6 +89,7 @@ void PlaybackEngine::reloadSlot (int slot)
 {
     auto& s = *slots[(size_t) slot];
     auto playable = takeHistory.playable (slot);
+    s.hasReview = std::any_of (playable.begin(), playable.end(), [] (const TakeHistory::Entry& e) { return e.meta.state == TakeMeta::State::review; });
 
     // Only archived takes (after Reset slot): the slot shows its live camera until a take is restored or recorded.
     if (std::none_of (playable.begin(), playable.end(), [] (const TakeHistory::Entry& e)

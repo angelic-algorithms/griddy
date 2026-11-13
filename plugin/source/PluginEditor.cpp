@@ -206,7 +206,7 @@ void GriddyEditor::timerCallback()
         browser->emitEventIfBrowserIsVisible ("preview", (juce::int64) serial);
     }
 
-    if ((ticks++ % 15) == 0)
+    if ((ticks++ % 5) == 0)
         browser->emitEventIfBrowserIsVisible ("status", statusToVar());
 }
 

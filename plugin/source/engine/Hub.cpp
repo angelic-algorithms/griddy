@@ -150,7 +150,7 @@ void Hub::settleSlots()
     std::vector<Show> toShow;
     {
         const std::scoped_lock sl (memberLock);
-        uint32_t mask = 0;
+        uint32_t mask = 0, armed = 0;
         int minSlot = maxSlots;
         Member* lead = nullptr;
         int cameras = 1;
@@ -223,6 +223,8 @@ void Hub::settleSlots()
             if (const auto s = m->slot.load(); s >= 0)
             {
                 mask |= 1u << s;
+                if (! m->isMaster && m->controls.recordArm != nullptr && m->controls.recordArm->load() > 0.5f)
+                    armed |= 1u << s;
                 if (s < minSlot)
                 {
                     minSlot = s;
@@ -236,6 +238,7 @@ void Hub::settleSlots()
         }
 
         claimedMask = mask;
+        armedMask = armed;
         leader = lead;
         activeSlots = juce::jlimit (1, maxSlots, cameras);
     }
@@ -1269,8 +1272,10 @@ void Hub::drawPreview()
 
     compositor.render (output, cells, [&] (int slot) -> std::shared_ptr<const VideoFrame>
     {
-        // A slot being recorded shows its live camera. Others show their take, or the live camera if they have none.
-        if (slotRecording[(size_t) slot].load())
+        // A slot being recorded, or armed for a new take with none waiting in review, shows its live camera.
+        // Others show their take, or the live camera if they have none.
+        if (slotRecording[(size_t) slot].load()
+            || (((armedMask.load() >> slot) & 1u) != 0 && ! e->slotHasReview (slot)))
             return videoEngine.latestFrame (slot);
 
         if (const auto shown = e->shown (slot); shown != nullptr && shown->frame != nullptr)
@@ -1478,6 +1483,8 @@ juce::var Hub::getStatus (const Member* member) const
                 o->setProperty ("recording", slotRecording[(size_t) s].load());
                 o->setProperty ("recordStartPpq", recordStartPpq[(size_t) s].load());
                 o->setProperty ("trackName", names[(size_t) s]);
+                o->setProperty ("armed", ((armedMask.load() >> s) & 1u) != 0);
+                o->setProperty ("review", engine->slotHasReview (s));
                 o->setProperty ("status", shown != nullptr ? statusName (shown->status) : "noTake");
                 o->setProperty ("source", shown != nullptr ? kindName (shown->kind) : "none");
                 o->setProperty ("takeId", shown != nullptr ? shown->takeId : -1);
