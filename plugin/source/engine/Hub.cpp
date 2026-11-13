@@ -240,15 +240,19 @@ void Hub::settleSlots()
         activeSlots = juce::jlimit (1, maxSlots, cameras);
     }
 
-    // Parameters belong to the message thread. The member may be gone by then, so look it up again.
+    // Parameters belong to the message thread. The member, or the whole hub, may be gone by then, so look it up again.
     for (const auto& show : toShow)
-        juce::MessageManager::callAsync ([this, show]
+        juce::MessageManager::callAsync ([self = juce::WeakReference<Hub> (this), show]
         {
+            if (self == nullptr)
+                return;
+
+            auto* hub = self.get();
             std::function<void (int)> slotFn;
             std::function<void (bool)> masterFn;
             {
-                const std::scoped_lock sl (memberLock);
-                for (auto& x : members)
+                const std::scoped_lock sl (hub->memberLock);
+                for (auto& x : hub->members)
                     if (x.get() == show.m)
                     {
                         slotFn = x->controls.setSlotParameter;
@@ -770,13 +774,16 @@ void Hub::purgeLater()
 
 void Hub::disarmLater (Member* member)
 {
-    // Parameters belong to the message thread. The member may be gone by then, so look it up again.
-    juce::MessageManager::callAsync ([this, member]
+    // Parameters belong to the message thread. The member, or the whole hub, may be gone by then, so look it up again.
+    juce::MessageManager::callAsync ([self = juce::WeakReference<Hub> (this), member]
     {
+        if (self == nullptr)
+            return;
+
         std::function<void (bool)> armFn;
         {
-            const std::scoped_lock sl (memberLock);
-            for (auto& x : members)
+            const std::scoped_lock sl (self->memberLock);
+            for (auto& x : self->members)
                 if (x.get() == member)
                     armFn = x->controls.setArmParameter;
         }

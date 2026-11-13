@@ -63,6 +63,7 @@ jobs:
       # reports numbers and is not a gate. The unit tests and the smoke test are the gate.
       - name: Engine harness (real time scenarios, 60 second soak)
         continue-on-error: true
+        timeout-minutes: 20
         run: |
           ./build/GriddyHarness_artefacts/Release/GriddyHarness
           ./build/GriddyHarness_artefacts/Release/GriddyHarness soak --soak-seconds 60 --soak-720
@@ -139,6 +140,7 @@ jobs:
       # reports numbers and is not a gate. The unit tests and the smoke test are the gate.
       - name: Engine harness (real time scenarios, 60 second soak)
         continue-on-error: true
+        timeout-minutes: 20
         run: |
           xvfb-run -a ./build/GriddyHarness_artefacts/Release/GriddyHarness
           xvfb-run -a ./build/GriddyHarness_artefacts/Release/GriddyHarness soak --soak-seconds 60 --soak-720

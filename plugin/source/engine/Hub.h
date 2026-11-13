@@ -255,6 +255,7 @@ private:
     mutable std::mutex statusLock;
     juce::String lastError;
 
+    JUCE_DECLARE_WEAK_REFERENCEABLE (Hub)
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (Hub)
 };
 
