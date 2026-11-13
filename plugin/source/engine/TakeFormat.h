@@ -52,6 +52,23 @@ struct TakeMeta
     /** Reference loudness every 0.1 s, for telling a trimmed clip from a quiet passage. */
     std::vector<float> envelope;
 
+    /** Where each stretch of the take sat on the host timeline. One piece for a plain take; a take recorded while the
+        DAW looped has one per pass, because the host jumped back at every wrap. Empty in takes from older versions,
+        which means one piece at the start. */
+    struct HostPiece { double takeSeconds = 0.0; double hostSeconds = 0.0; };
+    std::vector<HostPiece> hostPieces;
+
+    /** The name of the track whose audio the take listened to, when the host told us. */
+    juce::String trackName;
+
+    /** hostPieces, or the single piece an older take implies. */
+    std::vector<HostPiece> pieces() const
+    {
+        if (! hostPieces.empty())
+            return hostPieces;
+        return { HostPiece { 0.0, hostStartSeconds() } };
+    }
+
     /** Where on the video timeline the picture of frame i belongs, after latency and slip. */
     double videoOffsetSeconds() const noexcept { return audioLatencySeconds - cameraLatencySeconds + slipSeconds; }
 

@@ -3,8 +3,10 @@
 #include "ClipSource.h"
 #include "HostClock.h"
 #include "SeqLock.h"
+#include "SpscRing.h"
 #include "sync/HostPositionClipSource.h"
 
+#include <atomic>
 #include <memory>
 #include <mutex>
 #include <vector>
@@ -32,7 +34,20 @@ struct SlotTarget
     uint8_t playing = 0;
     uint8_t warpSuspected = 0;
     uint8_t predictedWrap = 0;
+    uint8_t gap = 0;      // no clip plays here: the picture goes black (status is held)
+    int16_t pass = -1;    // which recorded pass of the take, when the position matches one
     uint32_t serial = 0;
+};
+
+/** How a slot's take changed, for griddy.log. */
+struct TakeChange
+{
+    enum Path : uint8_t { aligned, fingerprint, embedded, prior, silence, gapStart, gapEnd };
+    int32_t oldTake = -1, newTake = -1;
+    int16_t oldPass = -1, newPass = -1;
+    double hostSeconds = 0.0;
+    Path path = aligned;
+    static const char* pathName (Path p);
 };
 
 /** What the controller knows about a take. */
@@ -45,6 +60,10 @@ struct TakeProfile
     /** Reference loudness every envelopeStep seconds (RMS), for telling "the clip ended" from "a quiet passage". */
     std::shared_ptr<const std::vector<float>> envelope;
     double envelopeStep = 0.1;
+
+    /** Where the take sat on the host timeline: one range per recorded pass. */
+    struct Range { double hostStart = 0.0, hostEnd = 0.0, takeAtHostStart = 0.0; };
+    std::vector<Range> ranges;
 };
 
 /** Per slot: combines the three sources into one steady answer.
@@ -67,6 +86,16 @@ public:
     /** Computes the target for this moment. wallNow is steadyNowSeconds(). */
     SlotTarget update (double wallNow);
 
+    /** Comp detection and black gaps (on unless GRIDDY_NO_COMP). */
+    void setCompEnabled (bool on) noexcept { compOn = on; }
+
+    /** Black gaps and silent piece detection need the slot's own track audio: off for a slot no Griddy owns,
+        and for a slot that is armed or recording. */
+    void setGapsAllowed (bool on) noexcept { gapsAllowed = on; }
+
+    /** Takes the oldest take change not yet logged. Any one thread. */
+    bool popChange (TakeChange& c) { return changes.read (&c, 1) == 1; }
+
     /** Seconds between the first audio that could be matched and the first locked fix (for tests and status). */
     double lastLockLatencySeconds() const noexcept { return lockLatency; }
     int numJumps() const noexcept { return jumps; }
@@ -81,6 +110,8 @@ private:
     };
 
     bool accept (const ClipFix& f, const TakeProfile* take, double hostNow);
+    static int passOf (const TakeProfile& t, double offset);
+    void note (TakeChange::Path path, int32_t oldTake, int16_t oldPass, int32_t newTake, int16_t newPass, double hostNow);
     const TakeProfile* findTake (int32_t id, bool isTag) const;
     double envelopeAt (const TakeProfile& t, double seconds) const;
 
@@ -108,6 +139,17 @@ private:
     double lostSince = -1.0;
     double lastBlockWall = -1.0, smoothOffset = 0.0;
     bool offsetValid = false;
+
+    std::atomic<bool> compOn { true }, gapsAllowed { true };
+    uint32_t lastAlignedSerial = 0;
+    bool alignedActive = false;
+    int32_t alignedTake = -1;
+    double alignedOffset = 0.0;
+    double digitalSilentSince = -1.0, signalSince = -1.0;
+    bool inGap = false;
+    int32_t loggedTake = -1;
+    int16_t loggedPass = -1;
+    SpscRing<TakeChange> changes { 256 };
 };
 
 } // namespace griddy

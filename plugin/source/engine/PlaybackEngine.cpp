@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 
 namespace griddy
 {
@@ -35,6 +36,14 @@ PlaybackEngine::PlaybackEngine (Config c) : config (std::move (c)), takeHistory 
 
     for (int i = 0; i < config.numSlots; ++i)
         slots.push_back (std::make_unique<Slot> (config.sampleRate, config.player));
+
+    // Debug only: GRIDDY_NO_COMP switches comp detection and black gaps off, which is exactly the behaviour before them.
+    compOn = std::getenv ("GRIDDY_NO_COMP") == nullptr;
+    for (auto& s : slots)
+    {
+        s->fingerprint.setAlignedEnabled (compOn);
+        s->controller.setCompEnabled (compOn);
+    }
 
     output = juce::Image (juce::Image::ARGB, size.x, size.y, true, juce::SoftwareImageType());
 }
@@ -76,6 +85,12 @@ void PlaybackEngine::stop()
         s->player.stop();
 }
 
+void PlaybackEngine::setRecordingActive (bool on) noexcept
+{
+    for (auto& s : slots)
+        s->fingerprint.setLight (on);
+}
+
 void PlaybackEngine::feedSlotAudio (int slot, const float* mono, int n, int64_t hostSample, bool playing) noexcept
 {
     auto& s = *slots[(size_t) slot];
@@ -99,6 +114,7 @@ void PlaybackEngine::reloadSlot (int slot)
     std::vector<std::shared_ptr<const fingerprint::Index>> indexes;
     std::vector<TakeProfile> profiles;
     std::vector<TakeSpan> spans;
+    std::vector<fingerprint::AlignedCandidate> candidates;
     std::map<int32_t, std::shared_ptr<const fingerprint::Index>> keep;
 
     for (const auto& e : playable)
@@ -134,6 +150,28 @@ void PlaybackEngine::reloadSlot (int slot)
         p.durationSeconds = e.meta.durationSeconds;
         p.recordedBpm = e.meta.bpm;
         p.envelope = std::make_shared<const std::vector<float>> (e.meta.envelope);
+
+        // Every recorded pass of the take, where it sat on the host timeline: what comp detection compares against.
+        const auto pieces = e.meta.pieces();
+        for (size_t i = 0; i < pieces.size(); ++i)
+        {
+            const auto end = i + 1 < pieces.size() ? pieces[i + 1].takeSeconds : e.meta.durationSeconds;
+            TakeProfile::Range r;
+            r.hostStart = pieces[i].hostSeconds;
+            r.hostEnd = pieces[i].hostSeconds + std::max (0.0, end - pieces[i].takeSeconds);
+            r.takeAtHostStart = pieces[i].takeSeconds;
+            p.ranges.push_back (r);
+
+            fingerprint::AlignedCandidate c;
+            c.takeId = e.meta.takeId;
+            c.pass = (int) i;
+            c.hostStart = r.hostStart;
+            c.hostEnd = r.hostEnd;
+            c.takeAtHostStart = r.takeAtHostStart;
+            c.index = idx;
+            candidates.push_back (std::move (c));
+        }
+
         profiles.push_back (std::move (p));
 
         spans.push_back ({ e.meta.takeId, e.meta.hostStartSeconds(), e.meta.durationSeconds });
@@ -141,6 +179,7 @@ void PlaybackEngine::reloadSlot (int slot)
 
     s.indexCache = std::move (keep);
     s.fingerprint.setIndexes (std::move (indexes));
+    s.fingerprint.setCandidates (std::move (candidates));
     s.prior.setTakes (std::move (spans));
     s.controller.setTakes (std::move (profiles));
     s.player.setTakes (playable);

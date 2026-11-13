@@ -157,6 +157,45 @@ void SlotPlayer::run()
             continue;
         }
 
+        // No clip plays here: black, drawn by the compositor like any frame, so the preview and an export match.
+        if (tgt.gap != 0)
+        {
+            if (! lastGap)
+            {
+                static const auto black = []
+                {
+                    auto f = std::make_shared<VideoFrame>();
+                    f->image = juce::Image (juce::Image::ARGB, 16, 16, false, juce::SoftwareImageType());
+                    f->image.clear (f->image.getBounds(), juce::Colours::black);
+                    return std::shared_ptr<const VideoFrame> (f);
+                }();
+
+                auto s = std::make_shared<ShownFrame>();
+                s->frame = black;
+                s->takeId = tgt.takeId;
+                s->targetSeconds = tgt.takeSeconds;
+                s->publishWall = now;
+                s->status = tgt.status;
+                s->kind = tgt.kind;
+                s->playing = tgt.playing != 0;
+                s->gap = true;
+
+                {
+                    const std::scoped_lock sl (shownLock);
+                    current = s;
+                }
+
+                lastGap = true;
+                lastIndex = -1;
+                lastStatus = tgt.status;
+            }
+
+            wait (config.tickMs);
+            continue;
+        }
+
+        lastGap = false;
+
         auto* pb = playbackFor (tgt.takeId, now);
         if (pb == nullptr)
         {
@@ -197,6 +236,7 @@ void SlotPlayer::run()
                     s->playing = tgt.playing != 0;
                     s->predictedWrap = tgt.predictedWrap != 0;
                     s->warpSuspected = tgt.warpSuspected != 0;
+                    s->pass = tgt.pass;
 
                     {
                         const std::scoped_lock sl (shownLock);

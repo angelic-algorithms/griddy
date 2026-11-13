@@ -208,6 +208,7 @@ private:
     void settleSlots();
     void disarmLater (Member* member);
     void purgeLater();
+    void logTakeChanges (PlaybackEngine& e, int slot);
     void logTransport (Member& m, PlaybackEngine* e);
     void openSaved (const juce::String& savedId, const std::optional<std::vector<int32_t>>& savedTakes);
     void switchSession (const juce::String& id, const juce::String& why);

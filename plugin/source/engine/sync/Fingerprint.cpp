@@ -1,6 +1,7 @@
 #include "Fingerprint.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <complex>
 
@@ -309,6 +310,13 @@ void FingerprintClipSource::setIndexes (std::vector<std::shared_ptr<const Index>
     haveNewIndexes = true;
 }
 
+void FingerprintClipSource::setCandidates (std::vector<AlignedCandidate> c)
+{
+    const std::scoped_lock sl (indexLock);
+    pendingCandidates = std::move (c);
+    haveNewCandidates = true;
+}
+
 void FingerprintClipSource::feed (const float* mono, int numSamples, int64_t hostSample, bool playing) noexcept
 {
     if (! playing || numSamples <= 0)
@@ -335,6 +343,22 @@ void FingerprintClipSource::process()
         matcher.setIndexes (pendingIndexes);
     }
 
+    if (haveNewCandidates.exchange (false))
+    {
+        {
+            const std::scoped_lock sl (indexLock);
+            candidates = pendingCandidates;
+        }
+
+        winner = challenger = -1;
+        challengerWins = poorWindows = silentWindows = 0;
+        wasGood = false;
+        auto f = alignedFix.read();
+        f.locked = false;
+        f.serial = ++alignedSerial;
+        alignedFix.write (f);
+    }
+
     Stamp st;
     while (stamps.read (&st, 1) == 1)
         recent.push_back (st);
@@ -354,6 +378,7 @@ void FingerprintClipSource::process()
                 matcher.clearVotes();
                 analyzer.breakContinuity();
                 activeSamples = 0;
+                contiguous8k = 0;
                 continue;
             }
 
@@ -375,8 +400,16 @@ void FingerprintClipSource::process()
 
         landmarks.clear();
         const auto framesBefore = analyzer.frameCount();
+        const auto producedBefore = analyzer.samples8kProduced();
         analyzer.push (scratch.data(), (int) got, landmarks);
         streamConsumed += (int64_t) got;
+        contiguous8k += analyzer.samples8kProduced() - producedBefore;
+
+        // Aligned comp detection: every 25 ms of audio (50 ms while a slot records), and every 6 ms while waiting
+        // for the first sound after a silence, so a gap ends on the right take.
+        const auto alignedStep = winner < 0 && silentWindows > 0 ? 50 : (light.load (std::memory_order_relaxed) ? 400 : 200);
+        if (alignedOn.load (std::memory_order_relaxed) && analyzer.samples8kProduced() - lastAlignedAt >= alignedStep)
+            evaluateAligned();
 
         matcher.addLandmarks (landmarks);
         matcher.expire ((int32_t) analyzer.frameCount());
@@ -459,6 +492,32 @@ void FingerprintClipSource::evaluate()
 
     const auto refEnd = coarseEnd + bestLag;
 
+    // How far this take really sits from where it was recorded: centres the aligned detector's search on the latency
+    // the host adds. Only for a fix close to a recorded position; a moved clip says nothing about latency.
+    if (const auto host = hostSecondsOfNewest(); host >= 0.0)
+    {
+        const auto takeSeconds = (double) refEnd / analysisRate;
+        for (const auto& c : candidates)
+        {
+            if (c.takeId != idx.takeId || host < c.hostStart || host > c.hostEnd)
+                continue;
+
+            // In a comp the votes mix every take, so a single fix can name the wrong take at a plausible offset. Only a
+            // confident fix that repeats, for the take comp detection has chosen (or before it has chosen), moves it.
+            const auto d = takeSeconds - (c.takeAtHostStart + (host - c.hostStart));
+            const auto repeats = std::abs (d - lastFixDelta) < 0.002;
+            lastFixDelta = d;
+
+            if (std::abs (d) < 0.05 && repeats && bestCorr >= 0.7f && (winner < 0 || candidates[(size_t) winner].takeId == idx.takeId))
+            {
+                if (std::abs (d - latencyDelta) > 0.001)
+                    lag = 0;
+                latencyDelta = d;
+            }
+            break;
+        }
+    }
+
     for (auto it = recent.rbegin(); it != recent.rend(); ++it)
     {
         if (it->streamStart <= streamConsumed - 1)
@@ -475,6 +534,234 @@ void FingerprintClipSource::evaluate()
             break;
         }
     }
+}
+
+double FingerprintClipSource::hostSecondsOfNewest() const
+{
+    for (auto it = recent.rbegin(); it != recent.rend(); ++it)
+        if (it->streamStart <= streamConsumed - 1)
+            return (double) (it->hostSample + (streamConsumed - it->streamStart)) / sr;
+    return -1.0;
+}
+
+void FingerprintClipSource::evaluateAligned()
+{
+    // Several takes recorded over the same stretch of the timeline (Live's take lanes keep each one where it was
+    // recorded) differ only in which one is playing, not where. So compare the last 100 ms of what the track plays with
+    // each candidate at the position it was recorded, and keep the best, with hysteresis so near equals never flip.
+    const auto t0 = std::chrono::steady_clock::now();
+    lastAlignedAt = analyzer.samples8kProduced();
+
+    constexpr int window = 800;    // 100 ms at 8 kHz
+    constexpr int step = 2;        // every other sample: the same answer for half the work
+    constexpr int search = 4;      // lags tried around the current one, in 8 kHz samples
+    constexpr float minCorr = 0.5f, poorCorr = 0.3f, margin = 1.25f;
+
+    auto unlock = [this]
+    {
+        auto f = alignedFix.read();
+        if (f.locked)
+        {
+            f.locked = false;
+            f.serial = ++alignedSerial;
+            alignedFix.write (f);
+        }
+    };
+
+    auto spent = [this, t0] { alignedCpu = alignedCpu.load() + std::chrono::duration<double> (std::chrono::steady_clock::now() - t0).count(); };
+
+    const auto& live = analyzer.recent8k();
+    const auto host = hostSecondsOfNewest();
+
+    if (candidates.size() < 2 || contiguous8k < 160 || (int) live.size() < window || host < 0.0)
+    {
+        unlock();
+        winner = challenger = -1;
+        poorWindows = 0;
+        spent();
+        return;
+    }
+
+    // Compare only from where the sound starts, so the first window after a silence or a start is not diluted by it.
+    const float* W = live.data() + live.size() - (size_t) window;
+    int skip = window - (int) std::min<int64_t> (window, contiguous8k);
+    while (skip < window && std::abs (W[skip]) < 1.0e-4f)
+        ++skip;
+    skip += skip % step;
+    const int length = window - skip;
+    const float* L = W + skip;
+
+    double ea = 0.0;
+    for (int i = 0; i < length; i += step)
+        ea += (double) L[i] * L[i];
+
+    // Silence says nothing about which take plays: keep the current choice. After a long silence (a gap, a rest),
+    // the next sound is judged afresh rather than against the take before it.
+    if (length < 160 || ea / (length / step) < 1.0e-8)
+    {
+        if (++silentWindows >= 6)
+        {
+            winner = challenger = -1;
+            challengerWins = 0;
+        }
+
+        spent();
+        return;
+    }
+
+    silentWindows = 0;
+
+    struct Score { int index; float corr; int lagFound; double takeSeconds; };
+    std::vector<Score> scores;
+    scores.reserve (candidates.size());
+
+    for (int i = 0; i < (int) candidates.size(); ++i)
+    {
+        const auto& c = candidates[(size_t) i];
+        if (c.index == nullptr || host < c.hostStart || host > c.hostEnd)
+            continue;
+
+        const auto& ref = c.index->audio8k;
+        const auto t = c.takeAtHostStart + (host - c.hostStart) + latencyDelta;
+        const auto refEnd = (int64_t) std::llround (t * analysisRate) + lag;
+        float best = -2.0f;
+        int bestD = 0;
+
+        for (int d = -search; d <= search; ++d)
+        {
+            const auto start = refEnd + d - length;
+            if (start < 0 || start + length > (int64_t) ref.size())
+                continue;
+
+            const auto* R = ref.data() + start;
+            double num = 0.0, eb = 0.0;
+            for (int k = 0; k < length; k += step)
+            {
+                const auto b = (double) R[k];
+                num += (double) L[k] * b;
+                eb += b * b;
+            }
+
+            const auto corr = (float) (num / std::sqrt (ea * eb + 1.0e-6));
+            if (corr > best)
+            {
+                best = corr;
+                bestD = d;
+            }
+        }
+
+        if (best > -2.0f)
+            scores.push_back ({ i, best, bestD, t + (double) (lag + bestD) / analysisRate });
+    }
+
+    if (scores.size() < 2)
+    {
+        // With one candidate nothing changes from before: the fingerprint and the prior handle it.
+        unlock();
+        winner = challenger = -1;
+        poorWindows = 0;
+        spent();
+        return;
+    }
+
+    const auto top = std::max_element (scores.begin(), scores.end(), [] (const Score& a, const Score& b) { return a.corr < b.corr; });
+
+    // Nothing here sounds like any take where it was recorded: a piece was moved. Old votes would only slow the
+    // fingerprint down finding it, so start them afresh, once.
+    if (top->corr < poorCorr)
+    {
+        if (++poorWindows >= 4)
+        {
+            if (wasGood)
+                matcher.clearVotes();
+            wasGood = false;
+            winner = challenger = -1;
+            unlock();
+        }
+
+        spent();
+        return;
+    }
+
+    poorWindows = 0;
+
+    auto publish = [&] (const Score& sc)
+    {
+        const auto& c = candidates[(size_t) sc.index];
+        ClipFix f;
+        f.takeId = c.takeId;
+        f.pass = (int16_t) c.pass;
+        f.hostSeconds = host;
+        f.takeSeconds = sc.takeSeconds;
+        f.confidence = sc.corr;
+        f.kind = SyncKind::fingerprint;
+        f.locked = true;
+        f.serial = ++alignedSerial;
+        alignedFix.write (f);
+    };
+
+    const Score* current = nullptr;
+    for (const auto& sc : scores)
+        if (sc.index == winner)
+            current = &sc;
+
+    if (current == nullptr)
+    {
+        // A first choice. Near equals (within the margin) go to the newest take, so identical takes pick the newest.
+        if (top->corr < minCorr)
+        {
+            spent();
+            return;
+        }
+
+        const Score* pick = &*top;
+        for (const auto& sc : scores)
+            if (sc.corr * margin >= top->corr && candidates[(size_t) sc.index].takeId > candidates[(size_t) pick->index].takeId)
+                pick = &sc;
+
+        winner = pick->index;
+        challenger = -1;
+        challengerWins = 0;
+        current = pick;
+    }
+    else
+    {
+        // A challenger must beat the current take by the margin in two windows running.
+        const Score* rival = nullptr;
+        for (const auto& sc : scores)
+            if (sc.index != winner && (rival == nullptr || sc.corr > rival->corr))
+                rival = &sc;
+
+        if (rival != nullptr && rival->corr >= minCorr && rival->corr > margin * std::max (current->corr, 0.05f))
+        {
+            challengerWins = rival->index == challenger ? challengerWins + 1 : 1;
+            challenger = rival->index;
+
+            if (challengerWins >= 2)
+            {
+                winner = rival->index;
+                challenger = -1;
+                challengerWins = 0;
+                current = rival;
+            }
+        }
+        else
+        {
+            challenger = -1;
+            challengerWins = 0;
+        }
+    }
+
+    if (current->corr >= 0.6f)
+        wasGood = true;
+
+    // Follow the latency the host adds, one sample at a time, and only from a take that clearly plays: around a cut
+    // the old take's best lag is noise.
+    if (current->corr >= 0.85f && current->lagFound != 0)
+        lag = std::clamp (lag + (current->lagFound > 0 ? 1 : -1), -80, 80);
+
+    publish (*current);
+    spent();
 }
 
 } // namespace griddy::fingerprint

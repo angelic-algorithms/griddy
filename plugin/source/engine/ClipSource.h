@@ -28,6 +28,7 @@ struct ClipFix
     SyncKind kind = SyncKind::none;
     bool locked = false;
     bool warped = false; // evidence that the audio is time stretched; see the design note
+    int16_t pass = -1;   // aligned fixes: which host piece (loop pass) of the take; -1 when unknown
     uint32_t serial = 0; // changes whenever a new fix is published
 };
 
@@ -52,6 +53,10 @@ public:
 
     /** Any thread. The newest fix, or a fix with locked == false. */
     virtual ClipFix latest() const noexcept = 0;
+
+    /** Any thread. Which of several takes recorded over this host position is playing, judged at the position each
+        was recorded (a comp). Unlocked when fewer than two takes cover the position or nothing is clear. */
+    virtual ClipFix aligned() const noexcept { return {}; }
 };
 
 } // namespace griddy

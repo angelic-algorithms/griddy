@@ -28,6 +28,8 @@ struct ShownFrame
     bool playing = false;
     bool predictedWrap = false;
     bool warpSuspected = false;
+    bool gap = false;   // no clip plays here; frame is black
+    int pass = -1;      // which recorded pass of the take, when known
 };
 
 struct SlotPlayerStats
@@ -108,6 +110,7 @@ private:
     uint64_t serial = 0;
     int lastIndex = -1;
     int32_t lastTake = -1;
+    bool lastGap = false;
     SyncStatus lastStatus = SyncStatus::noTake;
 };
 

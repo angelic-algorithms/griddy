@@ -209,6 +209,18 @@ std::vector<TakeHistory::Entry> TakeHistory::playable (int slot) const
 {
     auto all = listed (slot, maxRecognised);
 
+    // Stop at the minutes cap too; the newest take always counts.
+    double seconds = 0.0;
+    for (size_t i = 0; i < all.size(); ++i)
+    {
+        seconds += all[i].meta.durationSeconds;
+        if (i > 0 && seconds > maxRecognisedMinutes * 60.0)
+        {
+            all.resize (i);
+            break;
+        }
+    }
+
     // The kept take always plays, even when more than maxRecognised newer takes were recorded over it.
     if (std::none_of (all.begin(), all.end(), [] (const Entry& e) { return e.meta.state == TakeMeta::State::kept; }))
         if (auto k = active (slot); k.has_value())

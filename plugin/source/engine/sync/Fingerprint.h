@@ -119,6 +119,17 @@ private:
     static uint64_t key (int takeIndex, int32_t offset) { return ((uint64_t) (uint32_t) takeIndex << 32) | (uint32_t) offset; }
 };
 
+/** One stretch of a take where it sat on the host timeline when it was recorded: a candidate for aligned comp detection.
+    A take recorded while the DAW looped has one per pass. */
+struct AlignedCandidate
+{
+    int32_t takeId = -1;
+    int pass = 0;
+    double hostStart = 0.0, hostEnd = 0.0; // host seconds this pass covers
+    double takeAtHostStart = 0.0;          // take seconds at hostStart
+    std::shared_ptr<const Index> index;
+};
+
 /** ClipSource built from the above. Takes are set from the message thread via setIndexes(). */
 class FingerprintClipSource final : public griddy::ClipSource
 {
@@ -133,6 +144,20 @@ public:
     /** Replaces the takes to match against. Safe to call from another thread. */
     void setIndexes (std::vector<std::shared_ptr<const Index>> idx);
 
+    /** Replaces the aligned candidates, newest take first. Safe to call from another thread. */
+    void setCandidates (std::vector<AlignedCandidate> c);
+
+    /** Switches aligned comp detection off (GRIDDY_NO_COMP). */
+    void setAlignedEnabled (bool on) noexcept { alignedOn = on; }
+
+    /** Light: evaluate aligned windows half as often, while a slot records, so the sync never costs a recorded frame. */
+    void setLight (bool on) noexcept { light = on; }
+
+    ClipFix aligned() const noexcept override { return alignedFix.read(); }
+
+    /** Seconds of sync worker time spent on aligned detection, for the benchmark. */
+    double alignedCpuSeconds() const noexcept { return alignedCpu.load(); }
+
     /** True while audio is flowing but nothing matches (warped, effected, bounced or a different take). */
     bool noMatchWhileActive() const noexcept { return unmatched.load(); }
 
@@ -143,6 +168,8 @@ private:
     struct Stamp { int64_t streamStart, hostSample; int32_t n; int32_t pad; };
 
     void evaluate();
+    void evaluateAligned();
+    double hostSecondsOfNewest() const;
 
     double sr;
     SpscRing<float> audio;
@@ -170,6 +197,25 @@ private:
 
     double lastLockedActivity = 0.0;
     int64_t activeSamples = 0; // consecutive samples with audible level
+
+    // Aligned comp detection. See docs/engine-design.md, Comping.
+    std::vector<AlignedCandidate> pendingCandidates; // guarded by indexLock
+    std::atomic<bool> haveNewCandidates { false };
+    std::vector<AlignedCandidate> candidates;
+    SeqLock<ClipFix> alignedFix;
+    uint32_t alignedSerial = 0;
+    std::atomic<bool> alignedOn { true }, light { false };
+    std::atomic<double> alignedCpu { 0.0 };
+    int64_t lastAlignedAt = 0;   // 8 kHz sample count at the last window
+    int64_t contiguous8k = 0;    // 8 kHz samples since the last break in the live audio
+    int winner = -1;             // index into candidates
+    int challenger = -1, challengerWins = 0;
+    int poorWindows = 0;
+    int silentWindows = 0;       // windows in a row with no sound; after a long silence the next sound is a fresh choice
+    bool wasGood = false;
+    int lag = 0;                 // 8 kHz samples the live audio sits after the predicted position
+    double latencyDelta = 0.0;   // seconds: last fingerprint fix minus the position its take was recorded at
+    double lastFixDelta = 1.0e9; // the same for the fix before, which a new value must repeat
 };
 
 } // namespace griddy::fingerprint

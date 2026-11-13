@@ -2,6 +2,8 @@
 
 #include "CollageLayout.h"
 
+#include <set>
+
 namespace griddy
 {
 
@@ -789,6 +791,29 @@ void Hub::logTransport (Member& m, PlaybackEngine* e)
     l.wall = now;
 }
 
+void Hub::logTakeChanges (PlaybackEngine& e, int slot)
+{
+    auto takeName = [] (int32_t take, int16_t pass)
+    {
+        if (take < 0)
+            return juce::String ("nothing");
+        return "take " + juce::String (take) + (pass >= 0 ? ", pass " + juce::String (pass + 1) : juce::String (", moved"));
+    };
+
+    TakeChange c;
+    while (e.popTakeChange (slot, c))
+    {
+        const auto where = " at host " + juce::String (c.hostSeconds, 3) + " s (" + TakeChange::pathName (c.path) + ")";
+
+        if (c.path == TakeChange::gapStart)
+            log ("slot " + juce::String (slot + 1) + ": gap, black, was " + takeName (c.oldTake, c.oldPass) + where);
+        else if (c.path == TakeChange::gapEnd)
+            log ("slot " + juce::String (slot + 1) + ": gap ends, " + takeName (c.newTake, c.newPass) + where);
+        else
+            log ("slot " + juce::String (slot + 1) + ": " + takeName (c.oldTake, c.oldPass) + " -> " + takeName (c.newTake, c.newPass) + where);
+    }
+}
+
 void Hub::purgeLater()
 {
     juce::File root;
@@ -904,6 +929,7 @@ void Hub::controlTick()
                 meta.bpm = m.requestBpm.load();
                 meta.timeSigNumerator = m.requestNum.load();
                 meta.timeSigDenominator = m.requestDen.load();
+                meta.trackName = m.trackName; // the track this take listens to; it follows edits on that track
 
                 TakeRecorder::Config cfg;
                 cfg.embedSync = false;
@@ -943,6 +969,24 @@ void Hub::controlTick()
                     r->pushFrame (frame->image, frame->captureTimeSeconds);
                 }
         }
+    }
+
+    if (e != nullptr)
+    {
+        // Black gaps need the slot's own track audio, so only slots a Griddy owns get them, and never while armed or recording.
+        const auto claimed = claimedMask.load();
+        const auto armed = armedMask.load();
+        bool anyRecording = false;
+
+        for (int s = 0; s < e->numSlots(); ++s)
+        {
+            const auto rec = slotRecording[(size_t) s].load();
+            anyRecording = anyRecording || rec;
+            e->setGapsAllowed (s, ((claimed >> s) & 1u) != 0 && ((armed >> s) & 1u) == 0 && ! rec);
+            logTakeChanges (*e, s);
+        }
+
+        e->setRecordingActive (anyRecording);
     }
 
     processResets (e);
@@ -1387,12 +1431,15 @@ juce::var Hub::takesToVar (int slot) const
 
     // Every take, newest first. The UI shows the newest few and the rest on request; past the cap the sync no longer
     // recognises a take, so the UI says so.
-    int index = 0;
+    std::set<int32_t> recognised;
+    for (const auto& e : engine->history().playable (slot))
+        recognised.insert (e.meta.takeId);
+
     for (const auto& e : engine->history().all (slot))
     {
         auto o = std::make_unique<juce::DynamicObject>();
         o->setProperty ("id", e.meta.takeId);
-        o->setProperty ("recognised", index++ < TakeHistory::maxRecognised);
+        o->setProperty ("recognised", recognised.count (e.meta.takeId) > 0);
         o->setProperty ("state", e.meta.state == TakeMeta::State::kept ? "kept"
                                : e.meta.state == TakeMeta::State::review ? "review" : "archived");
         o->setProperty ("seconds", e.meta.durationSeconds);
@@ -1405,6 +1452,7 @@ juce::var Hub::takesToVar (int slot) const
         // The latency compensation applied to this take (before slip), for the chip under the canvas.
         o->setProperty ("latencyMs", (e.meta.audioLatencySeconds - e.meta.cameraLatencySeconds) * 1000.0);
         o->setProperty ("hasMov", e.folder.getChildFile ("take.mov").existsAsFile());
+        o->setProperty ("heard", e.meta.trackName);
         list.add (juce::var (o.release()));
     }
 
@@ -1525,6 +1573,7 @@ juce::var Hub::getStatus (const Member* member) const
                 o->setProperty ("status", shown != nullptr ? statusName (shown->status) : "noTake");
                 o->setProperty ("source", shown != nullptr ? kindName (shown->kind) : "none");
                 o->setProperty ("takeId", shown != nullptr ? shown->takeId : -1);
+                o->setProperty ("gap", shown != nullptr && shown->gap);
                 o->setProperty ("warp", engine->slotLooksWarped (s));
                 o->setProperty ("lockMs", engine->lockLatencySeconds (s) * 1000.0);
                 slotList.add (juce::var (o.release()));

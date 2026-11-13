@@ -38,9 +38,11 @@ public:
 
     static constexpr int maxListed = 5;
 
-    /** How many takes per slot the sync recognises, newest first. Measured: see the bench scenario
-        and docs/engine-design.md (Comping). Older takes stay listed and restorable. */
+    /** How many takes per slot the sync recognises, newest first, and how many minutes of take audio at most: each
+        recognised take holds about 2 MB of sync data per minute. Measured: the comp_bench scenario and
+        docs/engine-design.md (Comping). Older takes stay listed and restorable. */
     static constexpr int maxRecognised = 20;
+    static constexpr double maxRecognisedMinutes = 30.0;
 
     explicit TakeHistory (juce::File rootFolder);
 

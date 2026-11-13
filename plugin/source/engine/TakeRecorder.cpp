@@ -33,6 +33,8 @@ public:
         std::vector<float> allAudioForEnvelope;
         std::vector<double> stampWall, stampTake;
         int64_t stampedSamples = 0;
+        std::vector<TakeMeta::HostPiece> pieces;
+        int64_t expectedHost = 0;
         std::vector<double> frameWall, deliveryDelays;
         int frameIndex = 0;
 
@@ -54,8 +56,15 @@ public:
             Stamp s;
             while (owner.stampRing.read (&s, 1) == 1)
             {
+                const auto sr = owner.entry.meta.sampleRate;
+
+                // A new host piece wherever the host position jumps (a loop wrap while recording).
+                if (pieces.empty() || std::abs (s.hostSample - expectedHost) > 32)
+                    pieces.push_back ({ (double) stampedSamples / sr, (double) s.hostSample / sr });
+                expectedHost = s.hostSample + s.numSamples;
+
                 stampWall.push_back (s.wall);
-                stampTake.push_back ((double) stampedSamples / owner.entry.meta.sampleRate);
+                stampTake.push_back ((double) stampedSamples / sr);
                 stampedSamples += s.numSamples;
             }
         };
@@ -166,6 +175,7 @@ public:
         meta.durationSeconds = (double) wav.numWritten() / meta.sampleRate;
         meta.envelope = computeEnvelope (allAudioForEnvelope.data(), allAudioForEnvelope.size(), meta.sampleRate);
         meta.embeddedSync = cfg.embedSync;
+        meta.hostPieces = pieces.size() > 1 ? pieces : std::vector<TakeMeta::HostPiece> {};
     }
 
 private:

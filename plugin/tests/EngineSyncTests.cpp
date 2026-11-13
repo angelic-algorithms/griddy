@@ -357,6 +357,23 @@ struct TakeHistoryTests : juce::UnitTest
         expectEquals ((int) h.playable (4).size(), TakeHistory::maxRecognised);
         expectEquals ((int) h.listed (4).size(), TakeHistory::maxListed);
 
+        beginTest ("the sync stops at the minutes cap, and the kept take always plays");
+        {
+            std::vector<TakeHistory::Entry> longTakes;
+            for (int i = 0; i < 6; ++i)
+            {
+                auto e = h.beginTake (5, TakeMeta {});
+                e.meta.numFrames = 1;
+                e.meta.durationSeconds = 8.0 * 60.0;
+                h.finishTake (e);
+                longTakes.push_back (e);
+            }
+            h.keep (5, longTakes.front().meta.takeId);
+            const auto p = h.playable (5);
+            expectEquals ((int) p.size(), 4, "three newest of 8 minutes each fit in 30 minutes, plus the kept take");
+            expect (std::any_of (p.begin(), p.end(), [&] (const TakeHistory::Entry& e) { return e.meta.takeId == longTakes.front().meta.takeId; }));
+        }
+
         beginTest ("slip is saved with the take");
         expect (h.setSlip (0, a.meta.takeId, 0.035));
         expectWithinAbsoluteError (h.active (0)->meta.slipSeconds, 0.035, 1.0e-9);

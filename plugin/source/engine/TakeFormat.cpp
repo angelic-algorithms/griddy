@@ -61,6 +61,18 @@ juce::var TakeMeta::toVar() const
         env.add ((double) e);
     o->setProperty ("frameTimes", times);
     o->setProperty ("envelope", env);
+
+    if (! hostPieces.empty())
+    {
+        juce::Array<juce::var> pieceList;
+        for (const auto& p : hostPieces)
+            pieceList.add (juce::Array<juce::var> { p.takeSeconds, p.hostSeconds });
+        o->setProperty ("hostPieces", pieceList);
+    }
+
+    if (trackName.isNotEmpty())
+        o->setProperty ("trackName", trackName);
+
     return juce::var (o);
 }
 
@@ -99,6 +111,12 @@ TakeMeta TakeMeta::fromVar (const juce::var& v)
         for (const auto& x : *e)
             m.envelope.push_back ((float) (double) x);
 
+    if (auto* p = v.getProperty ("hostPieces", {}).getArray())
+        for (const auto& x : *p)
+            if (x.isArray() && x.size() == 2)
+                m.hostPieces.push_back ({ (double) x[0], (double) x[1] });
+
+    m.trackName = v.getProperty ("trackName", {}).toString();
     return m;
 }
 

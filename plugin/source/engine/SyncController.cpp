@@ -10,6 +10,45 @@ namespace griddy
 static constexpr double jumpTolerance = 0.030;   // seconds: smaller differences are just refined
 static constexpr float silenceLevel = 0.002f;    // peak below this counts as silence
 static constexpr double silenceBeforeHold = 0.25; // seconds of silence, where the take is not silent, before holding
+static constexpr float digitalSilence = 1.0e-5f;  // about -100 dBFS: nothing plays on the track at all
+static constexpr double gapAfter = 0.150;          // seconds of digital silence before a gap goes black
+static constexpr double gapLeave = 0.025;          // seconds of sound that end a gap
+static constexpr double loudReference = 4.0 * silenceLevel; // a take's own audio is clearly not silent above this
+
+const char* TakeChange::pathName (Path p)
+{
+    switch (p)
+    {
+        case aligned:     return "comp detection";
+        case fingerprint: return "fingerprint";
+        case embedded:    return "sync signal";
+        case prior:       return "host position";
+        case silence:     return "silent piece";
+        case gapStart:    return "gap starts";
+        case gapEnd:      return "gap ends";
+    }
+    return "";
+}
+
+int SyncController::passOf (const TakeProfile& t, double offset)
+{
+    for (size_t i = 0; i < t.ranges.size(); ++i)
+        if (std::abs ((t.ranges[i].takeAtHostStart - t.ranges[i].hostStart) - offset) < 0.05)
+            return (int) i;
+    return -1;
+}
+
+void SyncController::note (TakeChange::Path path, int32_t oldTake, int16_t oldPass, int32_t newTake, int16_t newPass, double hostNow)
+{
+    TakeChange c;
+    c.path = path;
+    c.oldTake = oldTake;
+    c.oldPass = oldPass;
+    c.newTake = newTake;
+    c.newPass = newPass;
+    c.hostSeconds = hostNow;
+    changes.write (&c, 1);
+}
 
 SyncController::SyncController (const HostClock& h, ClipSource* e, ClipSource* f, HostPositionClipSource* p)
     : host (h), embedded (e), fingerprint (f), prior (p)
@@ -137,7 +176,12 @@ SlotTarget SyncController::update (double wallNow)
         pending = {};
         pendingCount = 0;
         lost = false;
+        alignedActive = false;
+        alignedTake = -1;
     }
+
+    const auto comp = compOn.load (std::memory_order_relaxed);
+    auto changePath = TakeChange::fingerprint;
 
     if (localTakes.empty())
     {
@@ -166,8 +210,44 @@ SlotTarget SyncController::update (double wallNow)
         if (f.serial != lastEmbeddedSerial)
         {
             lastEmbeddedSerial = f.serial;
+            const auto before = placement.takeId;
             if (accept (f, lookup (f.takeId, true), hostNow) && lockLatency < 0.0 && firstAudioWall >= 0.0)
                 lockLatency = wallNow - firstAudioWall;
+            if (placement.takeId != before)
+                changePath = TakeChange::embedded;
+        }
+    }
+
+    // Comp detection: of several takes recorded over this stretch, which one plays. It already waited out its own
+    // hysteresis, so a change is taken at once, as a hard cut.
+    if (comp && fingerprint != nullptr)
+    {
+        const auto a = fingerprint->aligned();
+        if (a.serial != lastAlignedSerial)
+        {
+            lastAlignedSerial = a.serial;
+            alignedActive = a.locked && lookup (a.takeId, false) != nullptr;
+
+            if (alignedActive)
+            {
+                alignedTake = a.takeId;
+                alignedOffset = a.takeSeconds - a.hostSeconds;
+
+                if (! (placement.valid && placement.kind == SyncKind::embedded))
+                {
+                    const auto same = placement.valid && placement.takeId == a.takeId && std::abs (placement.offset - alignedOffset) < jumpTolerance;
+                    if (! same || placement.kind == SyncKind::hostPosition)
+                    {
+                        placement.valid = true;
+                        placement.takeId = a.takeId;
+                        placement.offset = alignedOffset;
+                        placement.kind = SyncKind::fingerprint;
+                        pending = {};
+                        pendingCount = 0;
+                        changePath = TakeChange::aligned;
+                    }
+                }
+            }
         }
     }
 
@@ -178,8 +258,13 @@ SlotTarget SyncController::update (double wallNow)
         {
             lastFingerprintSerial = f.serial;
 
+            // While comp detection knows which take plays here, the fingerprint may only refine that take's position:
+            // its votes mix every take that sounds alike, so on its own it could flip between them.
+            const auto agreesWithComp = ! alignedActive
+                                     || (f.takeId == alignedTake && std::abs ((f.takeSeconds - f.hostSeconds) - alignedOffset) < jumpTolerance);
+
             // Never let the weaker source overwrite a recent embedded placement.
-            if (! (placement.valid && placement.kind == SyncKind::embedded))
+            if (! (placement.valid && placement.kind == SyncKind::embedded) && agreesWithComp)
                 if (accept (f, lookup (f.takeId, false), hostNow) && lockLatency < 0.0 && firstAudioWall >= 0.0)
                     lockLatency = wallNow - firstAudioWall;
 
@@ -212,7 +297,74 @@ SlotTarget SyncController::update (double wallNow)
             p.offset = f.takeSeconds - f.hostSeconds;
             p.kind = SyncKind::hostPosition;
             placement = p;
+            changePath = TakeChange::prior;
         }
+    }
+
+    // Digital silence on the track, timed for black gaps and silent pieces.
+    if (hs.playing && hs.level < digitalSilence)
+    {
+        if (digitalSilentSince < 0.0)
+            digitalSilentSince = wallNow;
+        signalSince = -1.0;
+    }
+    else
+    {
+        digitalSilentSince = -1.0;
+        if (signalSince < 0.0)
+            signalSince = wallNow;
+    }
+
+    const auto gapsOn = comp && hs.playing && gapsAllowed.load (std::memory_order_relaxed);
+    const auto longSilence = gapsOn && digitalSilentSince >= 0.0 && wallNow - digitalSilentSince >= gapAfter;
+
+    // A gap ends once sound has lasted gapLeave, which is also long enough for comp detection to say whose sound it is.
+    const auto stayInGap = inGap && gapsOn && signalSince >= 0.0 && wallNow - signalSince < gapLeave;
+
+    auto covering = [&] (const TakeProfile& t, double& takeSecondsHere) -> bool
+    {
+        for (const auto& r : t.ranges)
+            if (hostNow >= r.hostStart && hostNow < r.hostEnd)
+            {
+                takeSecondsHere = r.takeAtHostStart + (hostNow - r.hostStart);
+                return true;
+            }
+        return false;
+    };
+
+    // A piece that is silent on the track where one take's own audio was silent too: that take is playing (a singer
+    // resting in one take of a comp). Switch to it rather than going black. When the current take is silent here too,
+    // or two takes are, the current choice stays.
+    if (longSilence && ! inGap)
+    {
+        const TakeProfile* currentTake = placement.valid ? lookup (placement.takeId, false) : nullptr;
+        const auto currentQuiet = currentTake != nullptr && envelopeAt (*currentTake, hostNow + placement.offset) <= silenceLevel
+                               && hostNow + placement.offset < currentTake->durationSeconds;
+
+        if (! currentQuiet)
+        {
+            for (const auto& t : localTakes)
+            {
+                double ts = 0.0;
+                if (covering (t, ts) && envelopeAt (t, ts) <= silenceLevel && ts >= 0.0 && ts < t.durationSeconds
+                    && ! (placement.valid && placement.kind == SyncKind::embedded))
+                {
+                    placement.valid = true;
+                    placement.takeId = t.takeId;
+                    placement.offset = ts - hostNow;
+                    placement.kind = placement.kind == SyncKind::none ? SyncKind::hostPosition : placement.kind;
+                    changePath = TakeChange::silence;
+                    break; // the take in review or kept comes first, then the newest archived one
+                }
+            }
+        }
+    }
+
+    bool anyCovers = false;
+    for (const auto& t : localTakes)
+    {
+        double ts = 0.0;
+        anyCovers = anyCovers || covering (t, ts);
     }
 
     if (! placement.valid)
@@ -220,6 +372,18 @@ SlotTarget SyncController::update (double wallNow)
         out.takeId = active->takeId;
         out.status = hs.playing ? SyncStatus::held : SyncStatus::stopped;
         out.kind = SyncKind::none;
+
+        // Nothing placed yet and nothing was recorded here: no clip plays.
+        const auto gapNow = (longSilence && ! anyCovers) || stayInGap;
+        if (gapNow != inGap)
+        {
+            inGap = gapNow;
+            note (gapNow ? TakeChange::gapStart : TakeChange::gapEnd, loggedTake, loggedPass, -1, -1, hostNow);
+            loggedTake = -1;
+            loggedPass = -1;
+        }
+        out.gap = inGap ? 1 : 0;
+
         out.serial = ++serial;
         return out;
     }
@@ -266,6 +430,49 @@ SlotTarget SyncController::update (double wallNow)
     {
         pos = 0.0;
         out.status = SyncStatus::held;
+    }
+
+    // Black gaps. Digital silence where no take was recorded, or where the take this slot heard has sound of its own,
+    // means no clip plays: the picture goes black instead of holding a frame. Never for a take whose own audio is
+    // silent there, and never on a placement only the host position made (Griddy recorded with no audio in Live).
+    {
+        const auto unclamped = hostNow + placement.offset;
+        const auto refQuiet = unclamped >= 0.0 && unclamped < take->durationSeconds && envelopeAt (*take, unclamped) <= silenceLevel;
+
+        const auto heard = placement.kind == SyncKind::fingerprint || placement.kind == SyncKind::embedded;
+        const auto refLoud = heard && unclamped >= 0.0 && unclamped < take->durationSeconds && envelopeAt (*take, unclamped) > loudReference;
+        const auto gapNow = (longSilence && ! refQuiet && (! anyCovers || refLoud)) || stayInGap;
+
+        if (gapNow != inGap)
+        {
+            inGap = gapNow;
+            note (gapNow ? TakeChange::gapStart : TakeChange::gapEnd, loggedTake, loggedPass, gapNow ? -1 : take->takeId,
+                  gapNow ? (int16_t) -1 : (int16_t) passOf (*take, placement.offset), hostNow);
+            if (! gapNow)
+            {
+                loggedTake = take->takeId;
+                loggedPass = (int16_t) passOf (*take, placement.offset);
+            }
+            else
+            {
+                loggedTake = -1;
+                loggedPass = -1;
+            }
+        }
+
+        if (inGap)
+        {
+            out.gap = 1;
+            out.status = SyncStatus::held;
+        }
+    }
+
+    out.pass = (int16_t) passOf (*take, placement.offset);
+    if (! inGap && hs.playing && (take->takeId != loggedTake || out.pass != loggedPass))
+    {
+        note (changePath, loggedTake, loggedPass, take->takeId, out.pass, hostNow);
+        loggedTake = take->takeId;
+        loggedPass = out.pass;
     }
 
     out.takeSeconds = pos;

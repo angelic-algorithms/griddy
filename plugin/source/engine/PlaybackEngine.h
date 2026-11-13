@@ -117,6 +117,22 @@ public:
 
     SyncController& controller (int slot) { return slots[(size_t) slot]->controller; }
 
+    /** Comp detection and black gaps: on unless the GRIDDY_NO_COMP environment variable is set (debug only). */
+    bool compEnabled() const noexcept { return compOn; }
+
+    /** Black gaps need the slot's own track audio: the hub turns them off for slots no Griddy owns and for slots
+        that are armed or recording. */
+    void setGapsAllowed (int slot, bool on) noexcept { slots[(size_t) slot]->controller.setGapsAllowed (on); }
+
+    /** While any slot records, the sync worker does less, so the recording never loses a frame to it. */
+    void setRecordingActive (bool on) noexcept;
+
+    /** The oldest take change not yet logged for a slot. */
+    bool popTakeChange (int slot, TakeChange& c) { return slots[(size_t) slot]->controller.popChange (c); }
+
+    /** Seconds of sync worker time comp detection used in a slot, for the benchmark. */
+    double alignedCpuSeconds (int slot) const { return slots[(size_t) slot]->fingerprint.alignedCpuSeconds(); }
+
 private:
     struct Slot
     {
@@ -151,6 +167,7 @@ private:
     GpuCompositor gpu;
 
     std::atomic<bool> running { false };
+    bool compOn = true;
     std::unique_ptr<juce::Thread> syncThread, renderThread;
 
     mutable std::mutex outputLock;
