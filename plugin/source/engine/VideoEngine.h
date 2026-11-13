@@ -18,7 +18,6 @@ struct EngineControls
 {
     std::atomic<float>* numSlots = nullptr;
     std::atomic<float>* recordArm = nullptr;
-    std::atomic<float>* recordMode = nullptr; // read by TakeRecorder once it is wired in
 };
 
 /** Everything video: owns the cameras, runs the 30 fps compositing loop,

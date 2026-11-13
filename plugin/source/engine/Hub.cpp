@@ -598,12 +598,11 @@ void Hub::processBlock (Member& member, const juce::AudioBuffer<float>& buffer, 
 
     // Arm gates everything, so a stray play never records over a take.
     const auto armed = member.controls.recordArm != nullptr && member.controls.recordArm->load() > 0.5f;
-    const auto mode = readInt (member.controls.recordMode, 0);
-
     if (! armed)
         member.takeDone.store (false, std::memory_order_relaxed);
 
-    const auto want = slot >= 0 && armed && t.isPlaying && (mode == 0 ? t.isRecording : ! member.takeDone.load (std::memory_order_relaxed));
+    // The one rule: armed and playing records one take. Live sends no record flag, so its record button cannot be the gate.
+    const auto want = slot >= 0 && armed && t.isPlaying && ! member.takeDone.load (std::memory_order_relaxed);
 
     if (want && ! member.wantRecording.load (std::memory_order_relaxed))
     {
@@ -718,7 +717,6 @@ void Hub::logTransport (Member& m, PlaybackEngine* e)
     auto& l = m.logged;
     const auto playing = m.playing.load(), recording = m.hostRecording.load(), looping = m.hostLooping.load();
     const auto armed = m.controls.recordArm != nullptr && m.controls.recordArm->load() > 0.5f;
-    const auto mode = readInt (m.controls.recordMode, 0);
     const auto sample = m.hostSample.load();
     const auto now = juce::Time::getMillisecondCounterHiRes() / 1000.0;
     const auto who = "instance slot " + juce::String (m.slot.load() + 1) + ": ";
@@ -747,11 +745,11 @@ void Hub::logTransport (Member& m, PlaybackEngine* e)
     if (m.hostRecordSeen.exchange (false) && ! recording && ! l.recording)
         log (who + "the DAW's record flag was on for less than a control tick" + where);
 
-    if (! l.valid || playing != l.playing || recording != l.recording || looping != l.looping || armed != l.armed || mode != l.mode)
+    if (! l.valid || playing != l.playing || recording != l.recording || looping != l.looping || armed != l.armed)
     {
         log (who + (playing ? "playing" : "stopped") + (recording ? ", DAW recording" : ", DAW not recording") + (looping ? ", loop on" : "")
-             + (armed ? ", armed" : "") + ", record when " + juce::String (mode) + where + picture());
-        l = { true, playing, recording, looping, armed, mode, sample, now, false,
+             + (armed ? ", armed" : "") + where + picture());
+        l = { true, playing, recording, looping, armed, sample, now, false,
               shown != nullptr ? shown->takeId : -1, shown != nullptr ? shown->frameIndex : -1, now, false };
         return;
     }
@@ -905,7 +903,7 @@ void Hub::controlTick()
                 if (r->start (slot, meta, cfg))
                 {
                     log ("slot " + juce::String (slot + 1) + ": take " + juce::String (r->currentTakeId()) + " starts at sample "
-                         + juce::String (meta.startHostSample) + " (record when " + juce::String (readInt (m.controls.recordMode, 0)) + ")");
+                         + juce::String (meta.startHostSample));
                     m.recording = true;
                     m.lastCameraSerial = 0;
                     recordStartPpq[(size_t) slot] = meta.startPpq;
@@ -917,12 +915,9 @@ void Hub::controlTick()
                 m.recording = false;
                 slotBusy[(size_t) slot] = true;
 
-                // DAW plays and Armed record on every play while armed, so the take ends the arm.
-                if (readInt (m.controls.recordMode, 0) != 0)
-                {
-                    m.takeDone = true;
-                    disarmLater (&m);
-                }
+                // Every play while armed would record, so the take ends the arm.
+                m.takeDone = true;
+                disarmLater (&m);
 
                 // Stopping writes the last files and take.json; rebuilding the slot analyses its audio.
                 worker.addJob ([this, slot]
@@ -1459,15 +1454,13 @@ juce::var Hub::getStatus (const Member* member) const
     if (member != nullptr && mySlot >= 0 && member->controls.recordArm != nullptr && member->controls.recordArm->load() > 0.5f
         && ! slotRecording[(size_t) mySlot].load())
     {
-        const auto mode = readInt (member->controls.recordMode, 0);
-        if (! member->playing.load())
-            hint = "Armed. Press play in your DAW to start a take.";
-        else if (mode == 0 && ! member->hostRecording.load())
-            hint = "Armed and playing, but the DAW is not sending its record flag. Switch Record when to DAW plays.";
-        else if (audioEngine.load() == nullptr)
+        const auto n = juce::String (mySlot + 1);
+        if (audioEngine.load() == nullptr)
             hint = "Griddy's engine is not running yet.";
-        else
-            hint = "Starting the take...";
+        else if (videoEngine.getSlotSources()[(size_t) mySlot].isEmpty())
+            hint = "Pick a camera for slot " + n + " in the Slot tab.";
+        else if (! member->playing.load())
+            hint = "Armed. Press play in Live to record slot " + n + ".";
     }
     obj->setProperty ("recordHint", hint);
     obj->setProperty ("hostRecording", member != nullptr && member->hostRecording.load());

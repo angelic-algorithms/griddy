@@ -22,8 +22,7 @@ GriddyEditor::GriddyEditor (GriddyProcessor& p)
       slotAttachment (param (p, ParamIDs::slot), slotRelay, nullptr),
       masterAttachment (param (p, ParamIDs::master), masterRelay, nullptr),
       numSlotsAttachment (param (p, ParamIDs::numSlots), numSlotsRelay, nullptr),
-      recordArmAttachment (param (p, ParamIDs::recordArm), recordArmRelay, nullptr),
-      recordModeAttachment (param (p, ParamIDs::recordMode), recordModeRelay, nullptr)
+      recordArmAttachment (param (p, ParamIDs::recordArm), recordArmRelay, nullptr)
 {
     addAndMakeVisible (*browser);
 
@@ -61,7 +60,6 @@ juce::WebBrowserComponent::Options GriddyEditor::makeBrowserOptions()
         .withOptionsFrom (masterRelay)
         .withOptionsFrom (numSlotsRelay)
         .withOptionsFrom (recordArmRelay)
-        .withOptionsFrom (recordModeRelay)
         .withNativeFunction ("getDevices", [this] (const juce::Array<juce::var>&, auto complete)
         {
             complete (devicesToVar (engine.getDevices()));

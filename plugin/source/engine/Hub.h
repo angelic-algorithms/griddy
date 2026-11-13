@@ -39,7 +39,6 @@ struct MemberControls
 {
     std::atomic<float>* slot = nullptr;       // 1 to 9, which grid cell this instance owns
     std::atomic<float>* recordArm = nullptr;
-    std::atomic<float>* recordMode = nullptr; // 0 DAW records, 1 and 2 DAW plays
     std::atomic<float>* cameras = nullptr;    // smallest grid this instance wants to see
     std::atomic<float>* master = nullptr;     // on: no slot, this instance is the one that arranges the grid
     std::function<void (int)> setSlotParameter; // message thread: show a slot (0 based) in the instance's own parameter
@@ -62,8 +61,9 @@ struct Member
     std::atomic<bool> hostRecording { false };
     std::atomic<bool> hostRecordSeen { false }; // audio thread sets, logTransport clears: a record flag shorter than a control tick still shows in the log
 
-    // Control thread -> audio thread. In DAW plays and Armed a take is one shot: once it ends, nothing
-    // records until arm goes off and on again, so pressing play again plays the take instead of replacing it.
+    // Control thread -> audio thread. A take is one shot: once it ends, nothing records until arm goes off and
+    // on again, so pressing play again plays the take instead of replacing it. Live never tells a plugin it records
+    // (see docs/engine-design.md), so arm plus play is the one rule.
     std::atomic<bool> takeDone { false };
 
     // Audio thread -> control thread, for the transport log.
@@ -74,7 +74,7 @@ struct Member
     juce::String trackName;                     // from the host; guarded by the hub's memberLock
 
     // Control thread only: what the transport log last wrote for this instance.
-    struct Logged { bool valid = false, playing = false, recording = false, looping = false, armed = false; int mode = -1;
+    struct Logged { bool valid = false, playing = false, recording = false, looping = false, armed = false;
                     int64_t sample = 0; double wall = 0.0; bool stuck = false;
                     int32_t shownTake = -1; int shownFrame = -1; double shownSince = 0.0; bool pictureStuck = false; } logged;
 

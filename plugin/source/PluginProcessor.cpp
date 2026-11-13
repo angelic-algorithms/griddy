@@ -18,7 +18,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout GriddyProcessor::createParam
 
     layout.add (std::make_unique<AudioParameterBool> (ParameterID { ParamIDs::recordArm, 1 }, "Record arm", false));
 
-    layout.add (std::make_unique<AudioParameterChoice> (ParameterID { ParamIDs::recordMode, 1 }, "Record when",
+    // Record when is gone: arm plus play records one take. The parameter stays, unused, so saved sets and their
+    // automation still load. Its value is ignored.
+    layout.add (std::make_unique<AudioParameterChoice> (ParameterID { ParamIDs::recordMode, 1 }, "Record when (not used)",
                                                         StringArray { "DAW records", "DAW plays", "Armed" }, 1));
     return layout;
 }
@@ -34,7 +36,6 @@ GriddyProcessor::GriddyProcessor()
     controls.cameras    = parameters.getRawParameterValue (ParamIDs::numSlots);
     controls.master     = parameters.getRawParameterValue (ParamIDs::master);
     controls.recordArm  = parameters.getRawParameterValue (ParamIDs::recordArm);
-    controls.recordMode = parameters.getRawParameterValue (ParamIDs::recordMode);
 
     // The hub may need to move this instance to a free slot; the parameter is shown on the message thread.
     controls.setSlotParameter = [this] (int slot)
@@ -170,15 +171,6 @@ void GriddyProcessor::setStateInformation (const void* data, int sizeInBytes)
         return;
 
     auto state = juce::ValueTree::fromXml (*xml);
-
-    // Before version 2 the default Record when was DAW records, which never records in Live during plain
-    // playback. Projects and templates saved then still carry it, so move them to DAW plays once. A project
-    // saved after this keeps whatever was chosen.
-    if ((int) state.getProperty ("stateVersion", 1) < 2)
-        for (auto child : state)
-            if (child.hasType ("PARAM") && child.getProperty ("id").toString() == ParamIDs::recordMode
-                && (int) std::lround ((double) child.getProperty ("value", 1.0)) == 0)
-                child.setProperty ("value", 1.0, nullptr);
 
     parameters.replaceState (state);
 

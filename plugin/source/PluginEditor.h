@@ -49,7 +49,6 @@ private:
     juce::WebToggleButtonRelay masterRelay { ParamIDs::master };
     juce::WebSliderRelay numSlotsRelay { ParamIDs::numSlots };
     juce::WebToggleButtonRelay recordArmRelay { ParamIDs::recordArm };
-    juce::WebComboBoxRelay recordModeRelay { ParamIDs::recordMode };
 
     // Declared after the relays because its options reference them.
     std::unique_ptr<juce::WebBrowserComponent> browser;
@@ -58,7 +57,6 @@ private:
     juce::WebToggleButtonParameterAttachment masterAttachment;
     juce::WebSliderParameterAttachment numSlotsAttachment;
     juce::WebToggleButtonParameterAttachment recordArmAttachment;
-    juce::WebComboBoxParameterAttachment recordModeAttachment;
 
     std::unique_ptr<juce::FileChooser> folderChooser;
     int64_t lastPreviewSerial = 0;

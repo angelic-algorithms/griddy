@@ -15,7 +15,7 @@ namespace
 /** One fake plugin instance: its parameters, as the hub reads them. */
 struct FakeInstance
 {
-    std::atomic<float> slot { 1.0f }, arm { 0.0f }, mode { 1.0f }, cameras { 4.0f }, master { 0.0f };
+    std::atomic<float> slot { 1.0f }, arm { 0.0f }, cameras { 4.0f }, master { 0.0f };
     Member* member = nullptr;
 
     MemberControls controls()
@@ -23,7 +23,6 @@ struct FakeInstance
         MemberControls c;
         c.slot = &slot;
         c.recordArm = &arm;
-        c.recordMode = &mode;
         c.cameras = &cameras;
         c.master = &master;
         c.setSlotParameter = [this] (int s) { slot = (float) (s + 1); };
@@ -184,10 +183,10 @@ struct HubWorld
 };
 } // namespace
 
-// The test from Live on 12 November, from griddy.log: Record when DAW plays, slot 1 armed, play from bar 1
-// for about 4.5 seconds on a silent track, stop. Ten seconds later play again without arm: the take must play.
-// Then arm again, switch Record when to DAW records and play without the DAW recording: no take starts,
-// and the take still plays.
+// The test from Live on 12 November, from griddy.log: slot 1 armed, play from bar 1 for about 4.5 seconds on
+// a silent track, stop. Ten seconds later play again without arm: the take must play. Then the one rule again:
+// arm plus play records one new take and switches arm off, whatever the DAW's record flag says, and the
+// master never records.
 void hubRecordThenPlay (const Report& report)
 {
     // First a set that records a take in slots 1 and 2, then a new set that loads the same session id (a template),
@@ -248,17 +247,41 @@ void hubRecordThenPlay (const Report& report)
     w.daw->stop();
     report.check (take > 0 && played.size() > 5, "play again: the take plays (" + juce::String ((int) played.size()) + " distinct frames in 1.8 s)");
 
+    // Arm again and play, with the DAW's record flag off as Live always sends it: one new take, arm goes off.
+    const auto before = take;
     pump (1.0);
     one.arm = 1.0f;
     pump (0.5);
-    one.mode = 0.0f;
-    pump (0.5);
     w.daw->playFrom (0);
-    take = -1;
-    const auto again = w.watch (0, 2.5, take);
+    pump (2.0);
+    report.check (w.hub->isSlotRecording (0), "arm plus play records, with no record flag from the DAW");
     w.daw->stop();
-    report.check (! w.hub->isSlotRecording (0), "DAW records without the DAW recording starts no take");
-    report.check (take > 0 && again.size() > 5, "armed in DAW records mode, the take still plays (" + juce::String ((int) again.size()) + " distinct frames in 2.5 s)");
+    pump (1.5);
+    report.check (! w.hub->isSlotRecording (0) && one.arm.load() < 0.5f, "the second take also switched arm off");
+    take = -1;
+    w.watch (0, 0.5, take);
+    report.check (take > before, "the slot now shows the new take (" + juce::String (take) + " after " + juce::String (before) + ")");
+
+    // The record flag on, but not armed: nothing records.
+    w.daw->recording = true;
+    w.daw->playFrom (0);
+    pump (1.5);
+    report.check (! w.hub->isSlotRecording (0), "the DAW's record flag alone records nothing");
+    w.daw->stop();
+    w.daw->recording = false;
+    pump (0.5);
+
+    // The master has no slot, so arming it and playing records nothing anywhere.
+    auto& master = *w.instances[9];
+    master.arm = 1.0f;
+    w.daw->playFrom (0);
+    pump (1.5);
+    bool any = false;
+    for (int s = 0; s < 9; ++s)
+        any = any || w.hub->isSlotRecording (s);
+    report.check (! any, "an armed master records nothing");
+    w.daw->stop();
+    master.arm = 0.0f;
     pump (0.5);
     w.keepRoot = false;
 }

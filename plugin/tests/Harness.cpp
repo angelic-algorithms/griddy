@@ -730,7 +730,7 @@ void retakeDiscards()
     finish (*w);
 }
 
-// Record when "DAW plays": the DAW recorded no audio, so the track is silent on playback and only the
+// Griddy records on arm plus play, so the DAW may have recorded no audio: the track is silent on playback and only the
 // host position can place the video. It must still follow play, pause, loop and seek.
 void silentPlayback()
 {

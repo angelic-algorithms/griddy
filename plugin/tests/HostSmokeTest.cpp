@@ -148,7 +148,7 @@ int main (int argc, char** argv)
             names.add (param->getName (64));
         std::cout << "Parameters: " << names.joinIntoString (", ") << std::endl;
 
-        for (const auto* expected : { "Cameras", "Record arm", "Record when" })
+        for (const auto* expected : { "Cameras", "Record arm" })
             check (names.contains (expected), String ("parameter '") + expected + "' exposed to the host");
 
         FakePlayHead head;
@@ -188,7 +188,9 @@ int main (int argc, char** argv)
         };
         check (slotOf (*plugin) == "1" && slotOf (*second) == "2", "the two instances own different slots (" + slotOf (*plugin) + " and " + slotOf (*second) + ")");
 
-        head.playing = head.recording = true;
+        // Live never sends its record flag to a plugin, so play alone, with the flag off, is what records.
+        head.playing = true;
+        head.recording = false;
         runAudio ({ plugin.get(), second.get() }, head, 4.0, true);
         head.playing = head.recording = false;
         runAudio ({ plugin.get(), second.get() }, head, 0.5);
@@ -249,7 +251,7 @@ int main (int argc, char** argv)
                        "plain copies are named by slot and take");
         }
 
-        // Record when is DAW plays (the default), so the finished take switched arm off by itself.
+        // One take per arm: the finished take switched arm off by itself.
         for (auto* instance : { plugin.get(), second.get() })
             for (auto* param : instance->getParameters())
                 if (param->getName (64) == "Record arm")
@@ -330,12 +332,9 @@ int main (int argc, char** argv)
                 check (param->getCurrentValueAsText() == "9", "slot count restored from saved state");
     }
 
-    // A project or template saved by an older build with Record when on DAW records loads as DAW plays.
+    // Record when is gone. A state saved by any build, with any Record when value, records on arm plus play,
+    // one take, and switches arm off.
     {
-        auto plugin = load (fm, *types[0]);
-        if (plugin == nullptr)
-            return 1;
-
         // The VST3 host wraps the plugin's own state: base64 inside a VST3PluginState element.
         auto outer = AudioProcessor::getXmlFromBinary (savedState.getData(), (int) savedState.getSize());
         auto* component = outer != nullptr ? outer->getChildByName ("IComponent") : nullptr;
@@ -344,48 +343,68 @@ int main (int argc, char** argv)
         if (component != nullptr && inner.fromBase64Encoding (component->getAllSubText()))
             xml = AudioProcessor::getXmlFromBinary (inner.getData(), (int) inner.getSize());
 
-        check (xml != nullptr && xml->getIntAttribute ("stateVersion") == 3, "saved state carries its version");
+        check (xml != nullptr && xml->getIntAttribute ("stateVersion") == 4, "saved state carries its version");
         check (xml != nullptr && xml->hasAttribute ("sessionTakes") && xml->getStringAttribute ("sessionTakes").isNotEmpty(),
                "saved state lists the takes of its session (" + (xml != nullptr ? xml->getStringAttribute ("sessionTakes") : String()) + ")");
 
-        if (xml != nullptr)
+        auto takeFolders = [&root]
         {
-            xml->removeAttribute ("stateVersion");
-            int changed = 0;
-            for (auto* p : xml->getChildWithTagNameIterator ("PARAM"))
-                if (p->getStringAttribute ("id") == "recordMode")
+            StringArray names;
+            for (auto& f : root.getChildFile ("Sessions").findChildFiles (File::findDirectories, true, "*.gtake"))
+                names.add (f.getFullPathName());
+            return names;
+        };
+
+        if (xml != nullptr && component != nullptr)
+            for (int version : { 1, 2, 3, 4 })
+                for (int mode : { 0, 1, 2 })
                 {
-                    p->setAttribute ("value", 0.0);
-                    ++changed;
+                    xml->setAttribute ("stateVersion", version);
+                    for (auto* p : xml->getChildWithTagNameIterator ("PARAM"))
+                        if (p->getStringAttribute ("id") == "recordMode")
+                            p->setAttribute ("value", (double) mode);
+
+                    MemoryBlock innerOld, old;
+                    AudioProcessor::copyXmlToBinary (*xml, innerOld);
+                    component->deleteAllTextElements();
+                    component->addTextElement (innerOld.toBase64Encoding());
+                    AudioProcessor::copyXmlToBinary (*outer, old);
+
+                    auto plugin = load (fm, *types[0]);
+                    if (plugin == nullptr)
+                        return 1;
+                    plugin->setStateInformation (old.getData(), (int) old.getSize());
+
+                    FakePlayHead head;
+                    plugin->setPlayHead (&head);
+                    plugin->prepareToPlay (48000.0, 512);
+                    for (auto* param : plugin->getParameters())
+                        if (param->getName (64) == "Record arm")
+                            param->setValueNotifyingHost (1.0f);
+                    pumpMessages (200);
+
+                    const auto before = takeFolders();
+                    head.playing = true;
+                    head.recording = false;
+                    runAudio (*plugin, head, 1.5);
+                    head.playing = false;
+                    runAudio (*plugin, head, 0.3);
+                    pumpMessages (500);
+
+                    int added = 0;
+                    for (auto& t : takeFolders())
+                        added += before.contains (t) ? 0 : 1;
+                    bool armOff = false;
+                    for (auto* param : plugin->getParameters())
+                        if (param->getName (64) == "Record arm")
+                            armOff = param->getValue() < 0.5f;
+
+                    const auto what = "state version " + String (version) + ", Record when " + String (mode);
+                    check (added == 1, what + ": arm plus play recorded one take (" + String (added) + ")");
+                    check (armOff, what + ": the take switched arm off");
+                    plugin->releaseResources();
+                    pumpMessages (1500); // the take is finished on a worker thread before the instance goes
                 }
-            check (changed == 1, "the test found Record when in the saved state");
-
-            MemoryBlock innerOld, old;
-            AudioProcessor::copyXmlToBinary (*xml, innerOld);
-            component->deleteAllTextElements();
-            component->addTextElement (innerOld.toBase64Encoding());
-            AudioProcessor::copyXmlToBinary (*outer, old);
-            plugin->setStateInformation (old.getData(), (int) old.getSize());
-
-            for (auto* param : plugin->getParameters())
-                if (param->getName (64) == "Record when")
-                    check (param->getCurrentValueAsText() == "DAW plays", "an old DAW records state loads as DAW plays (" + param->getCurrentValueAsText() + ")");
-
-            // Saved again, DAW records is a real choice and stays.
-            for (auto* param : plugin->getParameters())
-                if (param->getName (64) == "Record when")
-                    param->setValueNotifyingHost (0.0f);
-
-            MemoryBlock fresh;
-            plugin->getStateInformation (fresh);
-            auto again = load (fm, *types[0]);
-            if (again == nullptr)
-                return 1;
-            again->setStateInformation (fresh.getData(), (int) fresh.getSize());
-            for (auto* param : again->getParameters())
-                if (param->getName (64) == "Record when")
-                    check (param->getCurrentValueAsText() == "DAW records", "a DAW records choice saved by this build is kept");
-        }
     }
 
     if (getenv ("GRIDDY_KEEP_SMOKE_FOLDER") == nullptr)
