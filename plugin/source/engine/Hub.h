@@ -26,9 +26,10 @@ struct GridLayout
     Canvas canvas = Canvas::hd720;
     int preset = -1;                  // index into the presets (CollageLayout.h); -1: a layout saved before presets, see legacyShape
     Template legacyShape = Template::grid;
-    float gap = 4.0f;                 // frame thickness: pixels around and between cells, measured on a 1280 wide canvas
-    float radius = 0.0f;              // cell corner radius, measured the same way
-    uint32_t background = 0xff0b0b0fu;
+    // A new set starts like the Overdub Cam design: an orange frame 6 thick with corners of 14. Saved sets keep their own.
+    float gap = 6.0f;                 // frame thickness: pixels around and between cells, measured on a 1280 wide canvas
+    float radius = 14.0f;             // cell corner radius, measured the same way
+    uint32_t background = 0xffff6a1au;
     std::array<int, 9> order { 0, 1, 2, 3, 4, 5, 6, 7, 8 }; // which slot sits in each cell, in reading order
 };
 

@@ -99,7 +99,7 @@ export function createMock() {
   let scenario = "mixed";
   let session = "b541fe4e-dbc2-452e-98c5-b4bd80d9dc93";
   let preset = 5;
-  let layout = { canvas: 0, gap: 8, radius: 14, background: "0b0b0d", order: [0, 1, 2, 3, 4, 5, 6, 7, 8] };
+  let layout = { canvas: 0, gap: 6, radius: 14, background: "ff6a1a", order: [0, 1, 2, 3, 4, 5, 6, 7, 8] };
   let slots: MockSlot[] = [];
   let playing = true;
   let hostLoop = false;
@@ -119,7 +119,7 @@ export function createMock() {
     slots = Array.from({ length: 9 }, emptySlot);
     const claim = (i: number, extra: Partial<MockSlot> = {}) => Object.assign(slots[i], { claimed: true, name: NAMES[i] }, extra);
     preset = 5;
-    layout = { canvas: 0, gap: 8, radius: 14, background: "0b0b0d", order: [0, 1, 2, 3, 4, 5, 6, 7, 8] };
+    layout = { canvas: 0, gap: 6, radius: 14, background: "ff6a1a", order: [0, 1, 2, 3, 4, 5, 6, 7, 8] };
     playing = true;
     hostLoop = false;
     exportState = "idle";
