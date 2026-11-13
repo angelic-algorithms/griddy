@@ -18,6 +18,8 @@ const options = {
   minify: !serve,
   sourcemap: serve ? "inline" : false,
   logLevel: "info",
+  // The fonts ride inside app.css, so the plugin needs no network and no extra files.
+  loader: { ".woff2": "dataurl" },
 };
 
 if (serve) {

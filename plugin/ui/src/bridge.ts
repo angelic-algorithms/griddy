@@ -85,6 +85,8 @@ export type Layout = {
   background: string;
   order: number[];
   cells: CellRect[];
+  /** Output size of every canvas, by canvas number, like "1280×720". */
+  sizes?: string[];
 };
 
 export type ExportStatus = {
@@ -124,8 +126,10 @@ const juce = (window as any).__JUCE__;
 export const isPlugin: boolean =
   !!juce?.initialisationData?.__juce__platform?.length;
 
-// Only used outside the plugin (a plain browser during UI work).
-const mock = createMock();
+// Only used outside the plugin (a plain browser during UI work). Inside the plugin it is never created.
+const mock = (isPlugin ? null : createMock()) as ReturnType<typeof createMock>;
+/** The mock backend, for the dev only state picker. Undefined inside the plugin. */
+export const devMock = isPlugin ? undefined : mock;
 
 // ---------------------------------------------------------------------------
 // Events pushed from C++ (see GriddyEditor::timerCallback)

@@ -34,8 +34,8 @@ GriddyEditor::GriddyEditor (GriddyProcessor& p)
    #endif
 
     setResizable (true, true);
-    setResizeLimits (720, 480, 2400, 1600);
-    setSize (1100, 720);
+    setResizeLimits (900, 620, 2400, 1600);
+    setSize (1280, 800);
 
     startTimerHz (30);
 }

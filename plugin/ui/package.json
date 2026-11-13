@@ -9,6 +9,9 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@fontsource/barlow-condensed": "5.3.0",
+    "@fontsource/bungee": "5.3.0",
+    "@fontsource/permanent-marker": "5.3.0",
     "@juce-framework/webview": "1.0.0",
     "react": "19.3.1",
     "react-dom": "19.3.1"
