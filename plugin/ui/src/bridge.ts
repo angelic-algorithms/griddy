@@ -25,6 +25,11 @@ export type Transport = {
   playing: boolean;
   recording: boolean;
   hostSync: boolean;
+  looping?: boolean;
+  hasLoop?: boolean;
+  loopStart?: number;
+  loopEnd?: number;
+  levels?: number[];
 };
 
 export type Status = {
@@ -38,7 +43,18 @@ export type Status = {
   engine?: EngineStatus;
 };
 
-export type TakeInfo = { id: number; state: "kept" | "review" | "archived"; seconds: number; slip: number; hasMov: boolean };
+export type TakeInfo = {
+  id: number;
+  state: "kept" | "review" | "archived";
+  seconds: number;
+  slip: number;
+  hasMov: boolean;
+  startPpq?: number;
+  bpm?: number;
+  timeSig?: string;
+  fps?: number;
+  latencyMs?: number;
+};
 
 export type SlotInfo = {
   slot: number;
@@ -49,9 +65,27 @@ export type SlotInfo = {
   takeId: number;
   warp: boolean;
   lockMs: number;
+  recordStartPpq?: number;
+  trackName?: string;
+  armed?: boolean;
+  review?: boolean;
 };
 
-export type Layout = { canvas: number; template: number; gap: number; background: string; order: number[] };
+/** One cell of the picture, 0..1 of the canvas, frame included. */
+export type CellRect = { slot: number; x: number; y: number; w: number; h: number };
+
+export type Layout = {
+  canvas: number;
+  width: number;
+  height: number;
+  preset: number;
+  presetId: string;
+  gap: number;
+  radius: number;
+  background: string;
+  order: number[];
+  cells: CellRect[];
+};
 
 export type ExportStatus = {
   available: boolean;
@@ -72,6 +106,7 @@ export type EngineStatus = {
   recordHint?: string;
   pendingFolder?: string;
   hostRecording?: boolean;
+  claimedMask?: number;
   master: boolean;
   error: string;
   slots: SlotInfo[];
@@ -122,7 +157,9 @@ export const api = {
   retakeTake: native<boolean>("retakeTake") as (slot: number, id: number) => Promise<boolean>,
   restoreTake: native<boolean>("restoreTake") as (slot: number, id: number) => Promise<boolean>,
   setSlip: native<boolean>("setSlip") as (slot: number, id: number, seconds: number) => Promise<boolean>,
-  setLayout: native<Layout>("setLayout") as (canvas: number, gap: number, background: string, template: number) => Promise<Layout>,
+  setLayout: native<Layout>("setLayout") as (canvas: number, gap: number, background: string, radius: number) => Promise<Layout>,
+  choosePreset: native<boolean>("choosePreset") as (index: number) => Promise<boolean>,
+  takePeaks: native<number[]>("takePeaks") as (slot: number, id: number) => Promise<number[]>,
   startExport: native<boolean>("startExport"),
   stopExport: native<boolean>("stopExport"),
   swapCells: native<boolean>("swapCells") as (a: number, b: number) => Promise<boolean>,

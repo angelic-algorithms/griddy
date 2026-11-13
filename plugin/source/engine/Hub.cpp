@@ -197,17 +197,31 @@ void Hub::settleSlots()
             if (wanted == current)
                 m->paramQueued = false;
 
-            if (! m->isMaster && current >= 0 && wanted != current && juce::isPositiveAndBelow (wanted, maxSlots))
+            // While the hub is still showing a slot it chose in the parameter, the parameter is not a request.
+            if (! m->isMaster && current >= 0 && wanted != current && juce::isPositiveAndBelow (wanted, maxSlots)
+                && m->pendingParamSlot < 0 && ! m->paramQueued)
             {
-                bool taken = false;
+                Member* holder = nullptr;
                 for (auto& o : members)
-                    taken = taken || (o.get() != m.get() && o->slot.load() == wanted);
+                    if (o.get() != m.get() && o->slot.load() == wanted)
+                        holder = o.get();
 
-                // A recording slot cannot move under its own take.
-                if (! taken && ! slotRecording[(size_t) current].load())
-                    m->slot = wanted;
-                else
+                // A slot taken by another track swaps: that track moves to this one's old slot. Takes stay with
+                // their slots. Neither slot may be recording, so no take moves under its own recording.
+                if (slotRecording[(size_t) current].load() || slotRecording[(size_t) wanted].load())
+                {
                     m->pendingParamSlot = current; // put the parameter back
+                }
+                else
+                {
+                    if (holder != nullptr)
+                    {
+                        holder->slot = current;
+                        holder->pendingParamSlot = current;
+                        log ("slot " + juce::String (wanted + 1) + " and slot " + juce::String (current + 1) + " swap tracks");
+                    }
+                    m->slot = wanted;
+                }
             }
 
             if ((m->pendingParamSlot >= 0 && ! m->paramQueued) || (m->pendingMasterParam >= 0 && ! m->masterQueued))
@@ -1172,6 +1186,14 @@ juce::var Hub::layoutToVar() const
     o->setProperty ("canvas", (int) l.canvas);
     o->setProperty ("width", size.x);
     o->setProperty ("height", size.y);
+
+    juce::Array<juce::var> sizes; // output size of every canvas, by canvas number
+    for (int c = 0; c < 4; ++c)
+    {
+        const auto cs = canvasSize ((Canvas) c);
+        sizes.add (juce::String (cs.x) + "\u00d7" + juce::String (cs.y));
+    }
+    o->setProperty ("sizes", sizes);
     o->setProperty ("preset", preset);
     o->setProperty ("presetId", juce::String (presetAt (preset).id));
     o->setProperty ("gap", (double) l.gap);
@@ -1366,6 +1388,8 @@ juce::var Hub::takesToVar (int slot) const
         o->setProperty ("bpm", e.meta.bpm);
         o->setProperty ("timeSig", juce::String (e.meta.timeSigNumerator) + "/" + juce::String (e.meta.timeSigDenominator));
         o->setProperty ("fps", e.meta.fps);
+        // The latency compensation applied to this take (before slip), for the chip under the canvas.
+        o->setProperty ("latencyMs", (e.meta.audioLatencySeconds - e.meta.cameraLatencySeconds) * 1000.0);
         o->setProperty ("hasMov", e.folder.getChildFile ("take.mov").existsAsFile());
         list.add (juce::var (o.release()));
     }

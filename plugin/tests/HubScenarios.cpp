@@ -429,6 +429,17 @@ void hubUiStatus (const Report& report)
     report.check (cells.size() == 9, "the layout lists a rectangle for each of the nine cells");
     report.check ((double) cells[0].getProperty ("x", 0.0) > 0.0, "the frame runs round the edge, so the first cell starts inside it");
 
+    // Track 1 asks for slot 2, which track 2 holds: they swap, and stay swapped.
+    one.slot = 2.0f;
+    pump (1.0);
+    report.check (one.member->slot.load() == 1 && w.instances[1]->member->slot.load() == 0, "asking for a held slot swaps the two tracks");
+    report.check (std::lround (w.instances[1]->slot.load()) == 1, "the other track's slot parameter shows its new slot");
+    pump (1.0);
+    report.check (one.member->slot.load() == 1 && w.instances[1]->member->slot.load() == 0, "the swap holds");
+    one.slot = 1.0f;
+    pump (1.0);
+    report.check (one.member->slot.load() == 0 && w.instances[1]->member->slot.load() == 1, "and swaps back");
+
     // With only slots 1 and 2 held, the 1+2 template is allowed and every instance shows three cameras.
     w.daw->stopThread (2000);
     for (size_t i = 2; i < w.instances.size(); ++i)
