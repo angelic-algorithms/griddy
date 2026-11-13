@@ -345,6 +345,8 @@ int main (int argc, char** argv)
             xml = AudioProcessor::getXmlFromBinary (inner.getData(), (int) inner.getSize());
 
         check (xml != nullptr && xml->getIntAttribute ("stateVersion") == 3, "saved state carries its version");
+        check (xml != nullptr && xml->hasAttribute ("sessionTakes") && xml->getStringAttribute ("sessionTakes").isNotEmpty(),
+               "saved state lists the takes of its session (" + (xml != nullptr ? xml->getStringAttribute ("sessionTakes") : String()) + ")");
 
         if (xml != nullptr)
         {

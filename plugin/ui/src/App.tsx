@@ -6,6 +6,7 @@ import { SyncChip, Takes } from "./Takes";
 import { Controls, RecordWhen } from "./Controls";
 import { useBackendEvent, useParam } from "./hooks";
 import { Preview } from "./Preview";
+import { ResetSlot, SessionPanel } from "./Recover";
 import { CameraPads } from "./Slots";
 
 const initialTransport: Transport = {
@@ -135,6 +136,7 @@ export function App() {
                         <span className="slot-num">{s.slot + 1}</span>
                         <SyncChip slot={s} />
                         {!s.claimed && <span className="muted">no track</span>}
+                        <ResetSlot slot={s.slot} />
                       </li>
                     ))}
                   </ul>
@@ -144,6 +146,7 @@ export function App() {
               </>
             )}
             <Controls />
+            {engine && <SessionPanel engine={engine} />}
             <section className="panel">
               <h2>Takes folder</h2>
               <p className="path" title={status.outputFolder}>{status.outputFolder || "…"}</p>

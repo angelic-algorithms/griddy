@@ -36,7 +36,7 @@ The ideas, from first principles:
 | Record arm | on, off |
 | Record when | DAW records, DAW plays (default), Armed. In DAW plays and Armed a take is one shot: arm switches off when it ends |
 
-Which camera sits in which slot and the takes folder are saved with your DAW project.
+Which camera sits in which slot, the takes folder and the session are saved with your DAW project. A saved project reopens its own takes; a new set, a set made from a template and a copied project each start a session of their own (see "Sessions" in `docs/engine-design.md`). The drawer shows which session folder is in use, with **New session** to start an empty one, and each slot has **Reset slot** to get back to the live camera. Neither deletes anything.
 
 ## Formats and hosts
 

@@ -22,8 +22,11 @@ export function Preview() {
 
     const draw = async (serial: number) => {
       busy = true;
+      // A request that never answers must not freeze the picture: give up after a second and take the next frame.
+      const abort = new AbortController();
+      const timer = setTimeout(() => abort.abort(), 1000);
       try {
-        const res = await fetch(previewUrl(serial), { cache: "no-store" });
+        const res = await fetch(previewUrl(serial), { cache: "no-store", signal: abort.signal });
         if (!res.ok) return;
         const bitmap = await createImageBitmap(await res.blob());
         const canvas = canvasRef.current;
@@ -37,6 +40,7 @@ export function Preview() {
       } catch {
         // A missed frame is fine; the next event brings a newer one.
       } finally {
+        clearTimeout(timer);
         busy = false;
         if (pending !== null && !cancelled) {
           const next = pending;

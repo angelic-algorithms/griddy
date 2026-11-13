@@ -124,6 +124,21 @@ juce::WebBrowserComponent::Options GriddyEditor::makeBrowserOptions()
         {
             complete (args.size() > 2 && hub.setSlip ((int) args[0], (int) args[1], (double) args[2]));
         })
+        .withNativeFunction ("resetSlot", [this] (const juce::Array<juce::var>& args, auto complete)
+        {
+            complete (args.size() > 0 && hub.resetSlot ((int) args[0]));
+        })
+        .withNativeFunction ("newSession", [this] (const juce::Array<juce::var>&, auto complete)
+        {
+            complete (hub.startNewSession());
+        })
+        .withNativeFunction ("revealSessionFolder", [this] (const juce::Array<juce::var>&, auto complete)
+        {
+            const auto folder = hub.getSessionFolder();
+            folder.createDirectory();
+            folder.revealToUser();
+            complete (true);
+        })
         .withNativeFunction ("revealOutputFolder", [this] (const juce::Array<juce::var>&, auto complete)
         {
             const auto folder = engine.getOutputFolder();

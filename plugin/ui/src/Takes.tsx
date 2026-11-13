@@ -1,4 +1,5 @@
 import { api, EngineStatus, SlotInfo, TakeInfo } from "./bridge";
+import { ResetSlot } from "./Recover";
 
 const syncText: Record<SlotInfo["status"], string> = {
   noTake: "No take yet",
@@ -83,6 +84,9 @@ export function Takes({ engine }: { engine: EngineStatus }) {
         </ul>
       )}
       {(engine.framesDropped ?? 0) > 0 && <p className="error">{engine.framesDropped} camera frames were dropped in the last take.</p>}
+      <div className="row">
+        <ResetSlot slot={slot} pending={engine.resetPending} />
+      </div>
     </section>
   );
 }

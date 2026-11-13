@@ -63,6 +63,8 @@ export type ExportStatus = {
 
 export type EngineStatus = {
   session: string;
+  sessionFolder?: string;
+  resetPending?: boolean;
   slot: number;
   instances: number;
   recording: boolean;
@@ -124,6 +126,9 @@ export const api = {
   startExport: native<boolean>("startExport"),
   stopExport: native<boolean>("stopExport"),
   swapCells: native<boolean>("swapCells") as (a: number, b: number) => Promise<boolean>,
+  resetSlot: native<boolean>("resetSlot") as (slot: number) => Promise<boolean>,
+  newSession: native<boolean>("newSession") as () => Promise<boolean>,
+  revealSessionFolder: native<boolean>("revealSessionFolder"),
 };
 
 /** URL of the latest preview JPEG. The query string only defeats caching; C++ ignores it. */

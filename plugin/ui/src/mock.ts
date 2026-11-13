@@ -82,6 +82,15 @@ export function createMock() {
           takes = takes.map((t) => (t.id === id ? { ...t, slip: seconds } : t));
           return true;
         }
+        case "resetSlot":
+          takes = takes.map((t) => (t.state === "archived" ? t : { ...t, state: "archived" }));
+          return true;
+        case "newSession":
+          session = `mock-${Math.random().toString(16).slice(2, 10)}`;
+          takes = [];
+          return true;
+        case "revealSessionFolder":
+          return true;
         case "setLayout": {
           const [canvas, gap, background, template] = args as [number, number, string, number];
           layout = { ...layout, canvas, gap, background, template };
@@ -123,6 +132,7 @@ export function createMock() {
 
   let exportState = "idle";
   let layout = { canvas: 0, template: 0, gap: 4, background: "0b0b0f", order: [0, 1, 2, 3, 4, 5, 6, 7, 8] };
+  let session = "b541fe4e-dbc2-452e-98c5-b4bd80d9dc93";
   let takes = [
     { id: 3, state: "review", seconds: 12.4, slip: 0, hasMov: true },
     { id: 2, state: "kept", seconds: 12.1, slip: 0.02, hasMov: true },
@@ -130,7 +140,7 @@ export function createMock() {
   ];
   function engineStatus() {
     return {
-      session: "mock", slot: 0, instances: 1, recording: false, armed: false, master: false, error: "",
+      session, sessionFolder: `${outputFolder}/Sessions/${session}`, slot: 0, instances: 1, recording: false, armed: false, master: false, error: "",
       slots: [0, 1, 2, 3].map((slot) => ({
         slot, claimed: slot === 0, recording: false, status: slot === 0 ? "locked" : "prior",
         source: slot === 0 ? "fingerprint" : "hostPosition", takeId: slot === 0 ? 2 : -1, warp: false, lockMs: 180,
