@@ -88,7 +88,12 @@ void PlaybackEngine::feedSlotAudio (int slot, const float* mono, int n, int64_t 
 void PlaybackEngine::reloadSlot (int slot)
 {
     auto& s = *slots[(size_t) slot];
-    const auto playable = takeHistory.playable (slot);
+    auto playable = takeHistory.playable (slot);
+
+    // Only archived takes (after Reset slot): the slot shows its live camera until a take is restored or recorded.
+    if (std::none_of (playable.begin(), playable.end(), [] (const TakeHistory::Entry& e)
+                      { return e.meta.state == TakeMeta::State::kept || e.meta.state == TakeMeta::State::review; }))
+        playable.clear();
 
     std::vector<std::shared_ptr<const fingerprint::Index>> indexes;
     std::vector<TakeProfile> profiles;

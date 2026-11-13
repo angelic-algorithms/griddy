@@ -11,6 +11,7 @@
 #include <juce_events/juce_events.h>
 #include <juce_graphics/juce_graphics.h>
 
+#include "HubScenarios.h"
 #include "TestSignals.h"
 #include "engine/GpuCompositor.h"
 #include "engine/GridExport.h"
@@ -1591,12 +1592,21 @@ void movPlayback()
     finish (*w);
 }
 
+griddy::harness::Report hubReport()
+{
+    return { [] (bool ok, const juce::String& what) { check (ok, what); }, [] (const juce::String& s) { say (s); } };
+}
+
 struct Scenario { const char* name; std::function<void()> run; bool inDefaultRun; };
 } // namespace
 
 int main (int argc, char** argv)
 {
     juce::ScopedJuceInitialiser_GUI init;
+
+    // Nothing the harness runs may write to the real takes folder.
+    const auto scratch = juce::File::createTempFile ("griddy-harness-takes");
+    setenv ("GRIDDY_TAKES_FOLDER", scratch.getFullPathName().toRawUTF8(), 1);
 
     double soakSeconds = 600.0;
     int soakSlots = 9;
@@ -1635,6 +1645,9 @@ int main (int argc, char** argv)
         { "mov_export", movExport, true },
         { "grid_export", gridExport, true },
         { "mov_playback", movPlayback, true },
+        { "hub_record_play", [] { griddy::harness::hubRecordThenPlay (hubReport()); }, true },
+        { "hub_sessions", [] { griddy::harness::hubSessions (hubReport()); }, true },
+        { "hub_reset_slot", [] { griddy::harness::hubResetSlot (hubReport()); }, true },
         { "soak", [&] { soak (soakSeconds, soakSlots, soakCanvas); }, false },
     };
 
@@ -1650,6 +1663,7 @@ int main (int argc, char** argv)
         s.run();
     }
 
+    scratch.deleteRecursively();
     say ("");
     say (failures == 0 ? "HARNESS PASSED" : "HARNESS FAILED (" + juce::String (failures) + " checks)");
     return failures == 0 ? 0 : 1;

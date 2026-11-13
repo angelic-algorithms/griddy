@@ -79,6 +79,7 @@ set(GRIDDY_CORE_SOURCES
     source/engine/FrameStore.cpp
     source/engine/TakeFormat.cpp
     source/engine/TakeHistory.cpp
+    source/engine/SessionStore.cpp
     source/engine/TakeRecorder.cpp
     source/engine/VideoDecoder.cpp
     source/engine/SyncController.cpp
@@ -115,18 +116,15 @@ juce_add_plugin(Griddy
     HARDENED_RUNTIME_ENABLED TRUE
     HARDENED_RUNTIME_OPTIONS com.apple.security.device.camera)
 
-target_sources(Griddy PRIVATE
-    source/PluginProcessor.cpp
-    source/PluginEditor.cpp
-    source/UiResources.cpp
-    ${GRIDDY_CORE_SOURCES}
+# The hub and the cameras: what one DAW process shares. The plugin and the harness (hub scenarios) build these.
+set(GRIDDY_HUB_SOURCES
     source/engine/VideoEngine.cpp
     source/engine/Hub.cpp
     source/capture/TestPatternSource.cpp
     source/capture/CaptureDevices.cpp)
-
+add_library(GriddyCapturePlatform INTERFACE)
 if(APPLE)
-    target_sources(Griddy PRIVATE
+    list(APPEND GRIDDY_HUB_SOURCES
         source/capture/AVFoundationCapture.mm
         source/capture/HostPermissions_mac.mm)
     # Our Objective-C++ files use ARC so we never hand manage retain/release.
@@ -134,11 +132,19 @@ if(APPLE)
         source/capture/AVFoundationCapture.mm
         source/capture/HostPermissions_mac.mm
         PROPERTIES COMPILE_FLAGS "-fobjc-arc")
-    target_link_libraries(Griddy PRIVATE
+    target_link_libraries(GriddyCapturePlatform INTERFACE
         "-framework AVFoundation" "-framework CoreMedia" "-framework CoreVideo" "-framework Security")
 else()
-    target_sources(Griddy PRIVATE source/capture/HostPermissions_other.cpp)
+    list(APPEND GRIDDY_HUB_SOURCES source/capture/HostPermissions_other.cpp)
 endif()
+
+target_sources(Griddy PRIVATE
+    source/PluginProcessor.cpp
+    source/PluginEditor.cpp
+    source/UiResources.cpp
+    ${GRIDDY_CORE_SOURCES}
+    ${GRIDDY_HUB_SOURCES})
+target_link_libraries(Griddy PRIVATE GriddyCapturePlatform)
 
 target_include_directories(Griddy PRIVATE source)
 
@@ -209,6 +215,7 @@ if(GRIDDY_BUILD_TESTS)
         tests/TestMain.cpp
         tests/EngineTests.cpp
         tests/EngineSyncTests.cpp
+        tests/SessionTests.cpp
         ${GRIDDY_CORE_SOURCES}
         source/capture/TestPatternSource.cpp)
     target_include_directories(GriddyTests PRIVATE source tests)
@@ -221,11 +228,14 @@ if(GRIDDY_BUILD_TESTS)
     juce_add_console_app(GriddyHarness PRODUCT_NAME "GriddyHarness")
     target_sources(GriddyHarness PRIVATE
         tests/Harness.cpp
-        ${GRIDDY_CORE_SOURCES})
+        tests/HubScenarios.cpp
+        ${GRIDDY_CORE_SOURCES}
+        ${GRIDDY_HUB_SOURCES})
     target_include_directories(GriddyHarness PRIVATE source tests)
-    target_compile_definitions(GriddyHarness PRIVATE JUCE_USE_CURL=0 JUCE_WEB_BROWSER=0)
+    target_compile_definitions(GriddyHarness PRIVATE JUCE_USE_CURL=0 JUCE_WEB_BROWSER=0 JUCE_MODAL_LOOPS_PERMITTED=1)
     target_link_libraries(GriddyHarness
-        PRIVATE juce::juce_core juce::juce_graphics juce::juce_events juce::juce_gui_basics juce::juce_opengl GriddyFfmpeg GriddyApple
+        PRIVATE juce::juce_core juce::juce_graphics juce::juce_events juce::juce_gui_basics juce::juce_opengl juce::juce_audio_basics
+                GriddyFfmpeg GriddyApple GriddyCapturePlatform
         PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
 
     # A fake DAW that loads the built VST3 and exercises it end to end.

@@ -344,7 +344,7 @@ int main (int argc, char** argv)
         if (component != nullptr && inner.fromBase64Encoding (component->getAllSubText()))
             xml = AudioProcessor::getXmlFromBinary (inner.getData(), (int) inner.getSize());
 
-        check (xml != nullptr && xml->getIntAttribute ("stateVersion") == 2, "saved state carries its version");
+        check (xml != nullptr && xml->getIntAttribute ("stateVersion") == 3, "saved state carries its version");
 
         if (xml != nullptr)
         {

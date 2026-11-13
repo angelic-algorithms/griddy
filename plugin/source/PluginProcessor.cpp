@@ -135,6 +135,7 @@ void GriddyProcessor::getStateInformation (juce::MemoryBlock& destData)
     state.setProperty ("source", slot >= 0 ? sources[(size_t) slot] : juce::String(), nullptr);
     state.setProperty ("outputFolder", hub->video().getOutputFolder().getFullPathName(), nullptr);
     state.setProperty ("session", hub->getSession(), nullptr);
+    state.setProperty ("sessionTakes", session::encodeTakeIds (hub->sessionTakes()), nullptr);
     state.setProperty ("layout", juce::JSON::toString (hub->layoutToVar(), true), nullptr);
     state.setProperty ("stateVersion", currentStateVersion, nullptr);
 
@@ -168,8 +169,13 @@ void GriddyProcessor::setStateInformation (const void* data, int sizeInBytes)
     if (const auto layout = state.getProperty ("layout").toString(); layout.isNotEmpty())
         hub->applyLayoutVar (juce::JSON::parse (layout));
 
-    // All instances of one project carry the same session id. The first one to load decides it.
-    hub->setSession (state.getProperty ("session").toString());
+    // All instances of one project carry the same session id and take list. The first one to load decides which
+    // session folder opens (see SessionStore.h): its own, a new one for a copy or a template, never another set's.
+    std::optional<std::vector<int32_t>> savedTakes;
+    if ((int) state.getProperty ("stateVersion", 1) >= 3 && state.hasProperty ("sessionTakes"))
+        savedTakes = session::decodeTakeIds (state.getProperty ("sessionTakes").toString());
+
+    hub->loadSession (member, state.getProperty ("session").toString(), savedTakes);
 
     // If a camera from last session is unplugged, the slot just shows "no camera".
     const auto source = state.getProperty ("source").toString();

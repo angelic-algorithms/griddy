@@ -111,6 +111,21 @@ bool TakeHistory::restore (int slot, int32_t takeId)
     return keep (slot, takeId);
 }
 
+int TakeHistory::archiveAll (int slot)
+{
+    const std::scoped_lock sl (lock);
+    int changed = 0;
+
+    for (auto& e : scan (slot))
+        if (e.meta.state == TakeMeta::State::kept || e.meta.state == TakeMeta::State::review)
+        {
+            e.meta.state = TakeMeta::State::archived;
+            changed += save (e) ? 1 : 0;
+        }
+
+    return changed;
+}
+
 bool TakeHistory::retake (int slot, int32_t takeId)
 {
     const std::scoped_lock sl (lock);

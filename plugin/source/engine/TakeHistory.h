@@ -51,6 +51,10 @@ public:
         Call this off the path that makes a new take playable. */
     static void purgeDiscarded (const juce::File& rootFolder);
     bool restore (int slot, int32_t takeId);
+
+    /** Reset slot: the kept take and the take in review become archived, so the slot shows no take until one is restored
+        or a new one is recorded. Returns how many takes changed. */
+    int archiveAll (int slot);
     bool setSlip (int slot, int32_t takeId, double slipSeconds);
 
     /** The kept take, if any. */

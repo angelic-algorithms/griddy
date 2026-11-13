@@ -91,6 +91,7 @@ private:
 
     mutable std::mutex takeLock;
     std::vector<TakeProfile> takes;
+    bool takesChanged = false; // guarded by takeLock; update() starts over from the new takes
 
     Placement placement;
     uint32_t lastEmbeddedSerial = 0, lastFingerprintSerial = 0;

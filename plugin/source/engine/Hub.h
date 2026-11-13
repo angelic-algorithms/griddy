@@ -1,6 +1,7 @@
 #pragma once
 
 #include "PlaybackEngine.h"
+#include "SessionStore.h"
 #include "TransportState.h"
 #include "GridExport.h"
 #include "VideoEngine.h"
@@ -13,6 +14,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <vector>
 
 namespace griddy
@@ -66,7 +68,12 @@ struct Member
 
     // Control thread only: what the transport log last wrote for this instance.
     struct Logged { bool valid = false, playing = false, recording = false, looping = false, armed = false; int mode = -1;
-                    int64_t sample = 0; double wall = 0.0; bool stuck = false; } logged;
+                    int64_t sample = 0; double wall = 0.0; bool stuck = false;
+                    int32_t shownTake = -1; int shownFrame = -1; double shownSince = 0.0; bool pictureStuck = false; } logged;
+
+    // Message thread only: the session this instance's saved state named, and the takes it knew.
+    juce::String stateSession;
+    std::optional<std::vector<int32_t>> stateTakes;
     std::atomic<int64_t> requestSample { 0 };
     std::atomic<double> requestPpq { 0.0 }, requestBpm { 120.0 };
     std::atomic<int> requestNum { 4 }, requestDen { 4 };
@@ -111,9 +118,24 @@ public:
     /** Message thread, from prepareToPlay. Builds the engine on the first call or when the sample rate changes. */
     void prepare (double sampleRate, int maxBlockSize);
 
-    /** Which project's takes the grid plays. The first instance to say wins. */
-    void setSession (const juce::String& sessionId);
+    /** Message thread, from setStateInformation: the session a saved state names and the takes it knew (none for a state
+        saved before take lists existed). The first instance of a project decides which session folder opens, see
+        SessionStore.h; the project's other instances join it, and a device brought in from another project joins too. */
+    void loadSession (Member* member, const juce::String& savedId, const std::optional<std::vector<int32_t>>& savedTakes);
     juce::String getSession() const;
+    juce::File getSessionFolder() const;
+
+    /** The takes in the current session folder, for the saved state. */
+    std::vector<int32_t> sessionTakes() const;
+
+    /** Message thread. Starts an empty session for this set. Nothing is deleted: the old folder stays where it is.
+        Refused (false) while a take or an export is running. */
+    bool startNewSession();
+
+    /** Message thread. Back to the starting step for one slot: a take in progress there ends (and is kept on disk),
+        Record arm goes off, and every take of the slot is archived so the slot shows its live camera again.
+        The takes stay in the take list and can be restored. */
+    bool resetSlot (int slot);
 
     /** Move where takes are saved. Applies at once when nothing is recording or exporting; otherwise it is
         kept as pending and applied by the control thread the moment they end, and this returns false. */
@@ -151,13 +173,20 @@ public:
 
     int numMembers() const;
 
+    /** What a slot shows from its takes right now, or null when it has none. For tests and the status. */
+    std::shared_ptr<const ShownFrame> shownTake (int slot) const;
+    bool isSlotRecording (int slot) const noexcept { return juce::isPositiveAndBelow (slot, maxSlots) && slotRecording[(size_t) slot].load(); }
+
 private:
     void run() override;
     void controlTick();
     void settleSlots();
     void disarmLater (Member* member);
     void purgeLater();
-    void logTransport (Member& m);
+    void logTransport (Member& m, PlaybackEngine* e);
+    void openSaved (const juce::String& savedId, const std::optional<std::vector<int32_t>>& savedTakes);
+    void switchSession (const juce::String& id, const juce::String& why);
+    void processResets (PlaybackEngine* e);
     void log (const juce::String& line);
     bool applyOutputFolder (const juce::File& folder);
     void buildEngine();
@@ -183,15 +212,18 @@ private:
 
     double sampleRate = 0.0;
     int maxBlock = 1024;
-    juce::String sessionId;
+    mutable std::mutex sessionLock;
+    juce::String sessionId;      // guarded by sessionLock
+    juce::String originId;       // message thread: the saved id the current session was opened for; empty for a fresh one
+    bool freshOnNextMember = false; // message thread: the last instance left, so the next one is a new set
 
     std::atomic<Member*> leader { nullptr };
     std::atomic<uint32_t> claimedMask { 0 };
     std::atomic<int> activeSlots { 4 };
-    std::atomic<bool> sessionAdopted { false };
 
     std::array<std::atomic<bool>, maxSlots> slotBusy;
     std::array<std::atomic<bool>, maxSlots> slotRecording;
+    std::array<std::atomic<bool>, maxSlots> resetRequested;
     std::array<std::atomic<uint64_t>, maxSlots> droppedFrames, droppedAudio;
 
     mutable std::mutex layoutLock;
@@ -216,7 +248,8 @@ private:
     juce::MemoryBlock previewJpeg;
     std::atomic<int64_t> previewSerial { 0 };
     int tick = 0;
-    std::unique_ptr<juce::FileOutputStream> logFile; // control thread only
+    std::mutex logLock;
+    std::unique_ptr<juce::FileOutputStream> logFile; // guarded by logLock
     juce::File logFolder;
 
     mutable std::mutex statusLock;

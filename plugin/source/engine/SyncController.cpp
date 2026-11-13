@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 namespace griddy
 {
@@ -17,12 +18,11 @@ SyncController::SyncController (const HostClock& h, ClipSource* e, ClipSource* f
 
 void SyncController::setTakes (std::vector<TakeProfile> t)
 {
+    // Called from a worker while the player thread runs update(). The placement belongs to update(), so it is
+    // reset there, never here: resetting it here raced with update() writing a placement for the old takes.
     const std::scoped_lock sl (takeLock);
     takes = std::move (t);
-    placement = {};
-    pending = {};
-    pendingCount = 0;
-    lost = false;
+    takesChanged = true;
 }
 
 const TakeProfile* SyncController::findTake (int32_t id, bool isTag) const
@@ -124,9 +124,19 @@ SlotTarget SyncController::update (double wallNow)
     }
 
     std::vector<TakeProfile> localTakes;
+    bool fresh = false;
     {
         const std::scoped_lock sl (takeLock);
         localTakes = takes;
+        fresh = std::exchange (takesChanged, false);
+    }
+
+    if (fresh)
+    {
+        placement = {};
+        pending = {};
+        pendingCount = 0;
+        lost = false;
     }
 
     if (localTakes.empty())
@@ -192,12 +202,13 @@ SlotTarget SyncController::update (double wallNow)
     const TakeProfile* active = &localTakes.front();
     if (! placement.valid && prior != nullptr)
     {
+        // The prior's takes are set a moment before ours, so only use a fix for a take we know.
         const auto f = prior->latest();
-        if (f.locked)
+        if (f.locked && lookup (f.takeId, false) != nullptr)
         {
             Placement p;
             p.valid = true;
-            p.takeId = active->takeId;
+            p.takeId = f.takeId;
             p.offset = f.takeSeconds - f.hostSeconds;
             p.kind = SyncKind::hostPosition;
             placement = p;

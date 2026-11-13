@@ -18,6 +18,7 @@ Hub::Hub()
         audioRecorders[(size_t) i] = nullptr;
         slotBusy[(size_t) i] = false;
         slotRecording[(size_t) i] = false;
+        resetRequested[(size_t) i] = false;
         droppedFrames[(size_t) i] = 0;
         droppedAudio[(size_t) i] = 0;
     }
@@ -67,6 +68,14 @@ int Hub::firstFreeSlot() const
 
 Member* Hub::addMember (MemberControls controls)
 {
+    // Every instance of the last set is gone, so this one belongs to a new set: it starts with an empty session.
+    if (freshOnNextMember)
+    {
+        freshOnNextMember = false;
+        originId.clear();
+        switchSession (juce::Uuid().toDashedString(), "a new set (every instance of the last one had closed)");
+    }
+
     const std::scoped_lock sl (memberLock);
 
     auto m = std::make_unique<Member> (controls);
@@ -105,10 +114,34 @@ void Hub::removeMember (Member* member)
         worker.removeAllJobs (false, 60000);
     }
 
+    // If the instances of the project whose session is open are all gone while instances of another project remain
+    // (a host that loads the next set before it closes the last), that other project's session opens now.
+    juce::String nextId;
+    std::optional<std::vector<int32_t>> nextTakes;
     {
         const std::scoped_lock sl (memberLock);
         members.erase (std::remove_if (members.begin(), members.end(), [&] (auto& m) { return m.get() == member; }), members.end());
+
+        if (members.empty())
+            freshOnNextMember = true;
+        else if (originId.isNotEmpty())
+        {
+            // Only when every instance left names one other project: a new instance (no saved state) keeps the session.
+            bool allOther = true;
+            for (auto& m : members)
+                allOther = allOther && m->stateSession.isNotEmpty() && m->stateSession != originId
+                                    && m->stateSession == members.front()->stateSession;
+
+            if (allOther)
+            {
+                nextId = members.front()->stateSession;
+                nextTakes = members.front()->stateTakes;
+            }
+        }
     }
+
+    if (nextId.isNotEmpty())
+        openSaved (nextId, nextTakes);
 }
 
 void Hub::settleSlots()
@@ -239,8 +272,9 @@ void Hub::buildEngine()
     cfg.sampleRate = sampleRate;
     cfg.canvas = Canvas::hd720;
     cfg.runRenderThread = false; // the hub draws the grid, including the live camera
-    cfg.takesRoot = videoEngine.getOutputFolder().getChildFile ("Sessions").getChildFile (sessionId);
+    cfg.takesRoot = getSessionFolder();
     cfg.takesRoot.createDirectory();
+    log ("engine ready: session " + getSession() + " at " + juce::String (sampleRate, 0) + " Hz");
 
     auto e = std::make_unique<PlaybackEngine> (cfg);
     e->start();
@@ -319,21 +353,161 @@ void Hub::prepare (double sr, int maxBlockSize)
     buildEngine();
 }
 
-void Hub::setSession (const juce::String& id)
+void Hub::loadSession (Member* member, const juce::String& savedId, const std::optional<std::vector<int32_t>>& savedTakes)
 {
-    if (id.isEmpty() || id == sessionId)
+    if (savedId.isEmpty())
         return;
 
-    // One project per DAW process: the first instance to name a session decides, the rest join it.
-    if (sessionAdopted.exchange (true))
+    if (member != nullptr)
+    {
+        member->stateSession = savedId;
+        member->stateTakes = savedTakes;
+    }
+
+    // The project's other instances name the same session as the one that decided.
+    if (savedId == originId || savedId == getSession())
+        return;
+
+    // Another instance of the open project has already loaded: this device came from somewhere else (pasted, or dragged
+    // in from another set). It joins the open session; it never switches the grid under the takes already there.
+    {
+        const std::scoped_lock sl (memberLock);
+        for (auto& m : members)
+            if (m.get() != member && m->stateSession.isNotEmpty() && (m->stateSession == originId || m->stateSession == getSession()))
+            {
+                log ("an instance from session " + savedId + " joins the open session " + getSession());
+                return;
+            }
+    }
+
+    // A fresh session that already has takes of its own stays; those takes were recorded in this set.
+    if (originId.isEmpty() && ! session::takeIdsOnDisk (getSessionFolder()).empty())
+    {
+        log ("an instance from session " + savedId + " joins the open session " + getSession() + ", which has takes of its own");
+        return;
+    }
+
+    openSaved (savedId, savedTakes);
+}
+
+void Hub::openSaved (const juce::String& savedId, const std::optional<std::vector<int32_t>>& savedTakes)
+{
+    const auto choice = session::choose (videoEngine.getOutputFolder().getChildFile ("Sessions"), savedId, savedTakes);
+    originId = savedId;
+
+    juce::String why = choice.kind == SessionChoice::Kind::reopened ? "reopened saved session " + savedId
+                     : choice.kind == SessionChoice::Kind::forked ? "new session for saved session " + savedId + " with its "
+                                                                     + juce::String (choice.linkedTakes) + " takes"
+                                                                   : "new empty session instead of saved session " + savedId;
+    switchSession (choice.id, why + ": " + choice.reason);
+}
+
+void Hub::switchSession (const juce::String& id, const juce::String& why)
+{
+    log ("session " + id + ": " + why);
+
+    if (id == getSession())
         return;
 
     worker.removeAllJobs (true, 60000);
     destroyEngine();
-    sessionId = id;
+    {
+        const std::scoped_lock sl (sessionLock);
+        sessionId = id;
+    }
+
+    for (auto& r : resetRequested)
+        r = false;
 
     if (sampleRate > 0.0)
         buildEngine();
+}
+
+bool Hub::startNewSession()
+{
+    for (auto& r : slotRecording)
+        if (r.load())
+            return false;
+
+    const auto es = exportState.load();
+    if (es == exportWaiting || es == exportRecording || es == exportWriting)
+        return false;
+
+    const auto id = juce::Uuid().toDashedString();
+    originId = id;
+    {
+        const std::scoped_lock sl (memberLock);
+        for (auto& m : members)
+        {
+            m->stateSession = id;
+            m->stateTakes.reset();
+        }
+    }
+
+    switchSession (id, "New session pressed; the previous session " + getSession() + " stays on disk");
+    return true;
+}
+
+bool Hub::resetSlot (int slot)
+{
+    if (! juce::isPositiveAndBelow (slot, maxSlots))
+        return false;
+
+    // Arm off first, so the take in progress ends and nothing starts again.
+    std::function<void (bool)> armFn;
+    {
+        const std::scoped_lock sl (memberLock);
+        for (auto& m : members)
+            if (m->slot.load() == slot)
+                armFn = m->controls.setArmParameter;
+    }
+
+    if (armFn)
+        armFn (false);
+
+    log ("slot " + juce::String (slot + 1) + ": Reset slot pressed");
+    resetRequested[(size_t) slot] = true;
+    return true;
+}
+
+void Hub::processResets (PlaybackEngine* e)
+{
+    // Control thread. A reset waits until the slot's take has ended and been written, then archives its takes.
+    for (int s = 0; s < maxSlots; ++s)
+    {
+        if (! resetRequested[(size_t) s].load() || slotRecording[(size_t) s].load() || slotBusy[(size_t) s].load())
+            continue;
+
+        bool recordingHere = false;
+        {
+            const std::scoped_lock sl (memberLock);
+            for (auto& m : members)
+                recordingHere = recordingHere || (m->slot.load() == s && m->recording);
+        }
+
+        if (recordingHere || e == nullptr)
+            continue;
+
+        resetRequested[(size_t) s] = false;
+        slotBusy[(size_t) s] = true;
+        worker.addJob ([this, s]
+        {
+            PlaybackEngine* engineNow = nullptr;
+            {
+                const std::scoped_lock sl (engineLock);
+                engineNow = engine.get();
+            }
+
+            if (engineNow != nullptr)
+            {
+                const auto n = engineNow->history().archiveAll (s);
+                engineNow->reloadSlot (s);
+                log ("slot " + juce::String (s + 1) + ": reset, " + juce::String (n) + " takes archived, the slot shows its camera");
+            }
+
+            slotBusy[(size_t) s] = false;
+        });
+    }
 }
 
 bool Hub::changeOutputFolder (const juce::File& folder)
@@ -381,7 +555,18 @@ bool Hub::applyOutputFolder (const juce::File& folder)
 
 juce::String Hub::getSession() const
 {
+    const std::scoped_lock sl (sessionLock);
     return sessionId;
+}
+
+juce::File Hub::getSessionFolder() const
+{
+    return videoEngine.getOutputFolder().getChildFile ("Sessions").getChildFile (getSession());
+}
+
+std::vector<int32_t> Hub::sessionTakes() const
+{
+    return session::takeIdsOnDisk (getSessionFolder());
 }
 
 //==============================================================================
@@ -471,6 +656,9 @@ void Hub::processBlock (Member& member, const juce::AudioBuffer<float>& buffer, 
 
 void Hub::log (const juce::String& line)
 {
+    // The control thread, the worker and the message thread all write here.
+    const std::scoped_lock sl (logLock);
+
     // One file per takes folder, started fresh when it grows past 2 MB.
     const auto folder = videoEngine.getOutputFolder().getChildFile ("Logs");
     if (logFile == nullptr || folder != logFolder)
@@ -492,7 +680,7 @@ void Hub::log (const juce::String& line)
     logFile->flush();
 }
 
-void Hub::logTransport (Member& m)
+void Hub::logTransport (Member& m, PlaybackEngine* e)
 {
     // What the DAW really sends, written when it changes, so a session in the DAW can be read back afterwards.
     auto& l = m.logged;
@@ -504,12 +692,49 @@ void Hub::logTransport (Member& m)
     const auto who = "instance slot " + juce::String (m.slot.load() + 1) + ": ";
     const auto where = " at sample " + juce::String (sample) + ", ppq " + juce::String (m.hostPpq.load(), 3);
 
+    // What the slot's picture is doing: which take and frame it shows, and how sure the sync is.
+    const auto slot = m.slot.load();
+    std::shared_ptr<const ShownFrame> shown;
+    if (e != nullptr && slot >= 0 && ! slotRecording[(size_t) slot].load())
+        shown = e->shown (slot);
+
+    const auto picture = [&]
+    {
+        if (slot < 0)
+            return juce::String();
+        if (slotRecording[(size_t) slot].load())
+            return juce::String (", shows its live camera (recording)");
+        if (shown == nullptr || shown->frame == nullptr)
+            return juce::String (", shows its live camera (no take)");
+        static const char* names[] = { "no take", "stopped", "following the playhead", "locked", "holding", "lost" };
+        return ", shows take " + juce::String (shown->takeId) + " frame " + juce::String (shown->frameIndex) + " ("
+               + names[juce::jlimit (0, 5, (int) shown->status)] + ")";
+    };
+
     if (! l.valid || playing != l.playing || recording != l.recording || looping != l.looping || armed != l.armed || mode != l.mode)
     {
         log (who + (playing ? "playing" : "stopped") + (recording ? ", DAW recording" : "") + (looping ? ", loop on" : "")
-             + (armed ? ", armed" : "") + ", record when " + juce::String (mode) + where);
-        l = { true, playing, recording, looping, armed, mode, sample, now, false };
+             + (armed ? ", armed" : "") + ", record when " + juce::String (mode) + where + picture());
+        l = { true, playing, recording, looping, armed, mode, sample, now, false,
+              shown != nullptr ? shown->takeId : -1, shown != nullptr ? shown->frameIndex : -1, now, false };
         return;
+    }
+
+    // Playing with a take on screen, the picture should move. Say so once if it stays on one frame for a second.
+    if (shown != nullptr && shown->frame != nullptr)
+    {
+        if (shown->takeId != l.shownTake || shown->frameIndex != l.shownFrame)
+        {
+            l.shownTake = shown->takeId;
+            l.shownFrame = shown->frameIndex;
+            l.shownSince = now;
+            l.pictureStuck = false;
+        }
+        else if (playing && ! l.pictureStuck && now - l.shownSince > 1.0 && shown->status != SyncStatus::held)
+        {
+            log (who + "playing, but the picture has stayed on one frame for a second" + where + picture());
+            l.pictureStuck = true;
+        }
     }
 
     if (! playing)
@@ -607,7 +832,7 @@ void Hub::controlTick()
         for (auto& mp : members)
         {
             auto& m = *mp;
-            logTransport (m);
+            logTransport (m, e);
 
             const auto slot = m.slot.load();
             if (slot < 0)
@@ -676,6 +901,7 @@ void Hub::controlTick()
         }
     }
 
+    processResets (e);
     updateExport();
 
     if ((tick++ % 8) == 0)
@@ -740,7 +966,7 @@ void Hub::updateExport()
         cfg.fps = 30;
         cfg.sampleRate = sampleRate;
         cfg.file = videoEngine.getOutputFolder().getChildFile ("Exports")
-                       .getChildFile (juce::File::createLegalFileName (sessionId + " " + juce::Time::getCurrentTime().formatted ("%Y-%m-%d %H-%M-%S")) + ".mp4");
+                       .getChildFile (juce::File::createLegalFileName (getSession() + " " + juce::Time::getCurrentTime().formatted ("%Y-%m-%d %H-%M-%S")) + ".mp4");
 
         juce::String error;
         if (exporter.start (cfg, error))
@@ -974,6 +1200,14 @@ void Hub::drawPreview()
     }
 }
 
+std::shared_ptr<const ShownFrame> Hub::shownTake (int slot) const
+{
+    const std::scoped_lock sl (engineLock);
+    if (engine == nullptr || ! juce::isPositiveAndBelow (slot, maxSlots))
+        return nullptr;
+    return engine->shown (slot);
+}
+
 juce::MemoryBlock Hub::getPreviewJpeg() const
 {
     const std::scoped_lock sl (previewLock);
@@ -1035,7 +1269,9 @@ juce::var Hub::getStatus (const Member* member) const
     const auto mySlot = member != nullptr ? member->slot.load() : -1;
 
     auto obj = std::make_unique<juce::DynamicObject>();
-    obj->setProperty ("session", sessionId);
+    obj->setProperty ("session", getSession());
+    obj->setProperty ("sessionFolder", getSessionFolder().getFullPathName());
+    obj->setProperty ("resetPending", mySlot >= 0 && resetRequested[(size_t) mySlot].load());
     obj->setProperty ("slot", mySlot);
     obj->setProperty ("targetSlot", mySlot);
     obj->setProperty ("instances", numMembers());
@@ -1144,6 +1380,7 @@ void Hub::reloadLater (int slot)
         { const std::scoped_lock sl (engineLock); e = engine.get(); } \
         if (e == nullptr || ! juce::isPositiveAndBelow (slot, maxSlots) || ! e->history().call) \
             return false;                                       \
+        log ("slot " + juce::String (slot + 1) + ": " #name " take " + juce::String (id)); \
         reloadLater (slot);                                     \
         return true;                                            \
     }
