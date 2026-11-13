@@ -146,3 +146,13 @@ Also changed: a new set starts like the mockup, an orange frame 6 thick with cor
 - Hints: "Armed. Press play in Live to record slot N.", "Pick a camera for slot N in the Slot tab.", "Griddy's engine is not running yet."; none while recording or not armed.
 - Toasts: "Slot N recorded. Keep it or retake it." then "Slot N disarmed. Press Rec to record again."
 - Mock states: Armed, Live stopped; Armed, Live playing; Armed, Live recording; Count in; Disarmed after take. Screenshots: compare/record-*.jpg
+
+## Comping
+- Takes: a new take over a review take archives it; Retake still discards. The sync recognises the newest 20 takes or 30 minutes per slot; the Slot tab lists five, then Show all; past the cap "Too old to follow comps". Setup shows the session's disk use.
+- Comp detection: aligned 100 ms correlation every 25 ms on the sync worker, 1.25 times for two windows, newest wins a tie; moved pieces clear the fingerprint votes; loop passes are candidates.
+- Gaps: black after 150 ms of digital silence where no clip plays, back on 25 ms of sound; never for a silent take, an unowned slot, Live stopped, or an armed or recording slot. A take's end while playing is now black.
+- What is playing: TAKE N or NO CLIP chip on tiles (with aria labels, not in the export), Playing in the Slot tab, the take number at the playhead in the timeline, a griddy.log line for every change.
+- Follow lines: "Follows Live's position. Put Griddy on this track to follow edits and comps." in the master view and the Slot tab; "This take listened to TRACK NAME. It follows edits on that track."
+- GRIDDY_NO_COMP switches comp detection and black gaps off (debug only).
+- Mock states: Comp playing; No Griddy on this track. Screenshots (1280 by 800 viewport, saved at 800 by 500 like the others): compare/comp-*.jpg, compare/no-griddy-*.jpg
+- Harness: comp_aligned, comp_crossfade, comp_loop_passes, comp_moved, comp_gap, comp_end, comp_silent_take, comp_unowned, comp_recording_load, comp_bench

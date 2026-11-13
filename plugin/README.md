@@ -49,6 +49,10 @@ Which camera sits in which slot, the takes folder and the session are saved with
 | Standalone | none needed | Its own app with its own camera permission; the fallback when a DAW blocks cameras |
 | AAX (Pro Tools) | Pro Tools | Not built. Needs Avid's AAX SDK, an Avid developer account and PACE signing |
 
+## Comps
+
+Put pieces of several takes together in Live's take lanes and each piece shows its own take's video, with hard cuts. Where no clip plays the picture goes black. Each tile shows which take is playing ("TAKE 3", or "NO CLIP"), the Slot tab marks it "Playing", and the takes timeline shows it at the playhead. This needs a Griddy on the track: a slot whose track has no Griddy follows Live's position only, and Griddy says so. A take replaced while in review is archived, not deleted, so its piece of a comp keeps its video; Retake still deletes. The sync recognises the newest 20 takes per slot (30 minutes of take audio at most); older takes say "Too old to follow comps" and stay restorable. Details and measurements: `docs/engine-design.md`, Comping.
+
 ## The real limits (read this before testing in Ableton)
 
 **Camera permission belongs to the DAW, not the plugin.** A plugin is a library inside the DAW's process, so macOS checks the DAW's `Info.plist` and entitlements. If the DAW never declared `NSCameraUsageDescription`, or it uses the hardened runtime without the camera entitlement, macOS **kills the whole DAW** the moment anything in it opens a camera ([this happened to the SPARTA plugins in Reaper](https://github.com/leomccormack/SPARTA/issues/82)). Griddy checks this before touching AVFoundation (`source/capture/HostPermissions_mac.mm`) and, if the host can't use cameras, shows a banner and offers test patterns only. It never crashes your session.
@@ -168,4 +172,4 @@ tests/                          unit tests and the fake DAW smoke test
 
 ## Engine harness
 
-`GriddyHarness` runs real time scenarios headlessly (fake DAW transport, fake webcam, real take files). Run `GriddyHarness` for all scenarios, or `GriddyHarness soak --soak-seconds 600`. Results: `docs/engine-benchmarks.md`.
+`GriddyHarness` runs real time scenarios headlessly (fake DAW transport, fake webcam, real take files). Run `GriddyHarness` for all scenarios, or `GriddyHarness soak --soak-seconds 600`. Results: `docs/engine-benchmarks.md`. The comp scenarios are `comp_aligned`, `comp_crossfade` (20 and 100 ms fades), `comp_loop_passes`, `comp_moved`, `comp_gap`, `comp_end`, `comp_silent_take`, `comp_unowned`, `comp_recording_load` and the `comp_bench` measurements; run them with `GRIDDY_NO_COMP=1` to see the behaviour before comping.
