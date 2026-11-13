@@ -41,6 +41,9 @@ export function SyncChip({ slot }: { slot: SlotInfo | undefined }) {
 const stateWords: Record<TakeInfo["state"], string> = { review: "REVIEW", kept: "✓ APPROVED", archived: "ARCHIVED" };
 const stateColor: Record<TakeInfo["state"], string> = { review: C.gold, kept: C.lime, archived: "#d8d6cc" };
 
+/** Takes listed before "Show all". */
+const LISTED = 5;
+
 function seconds(s: number) {
   const m = Math.floor(s / 60);
   return `${m}:${(s - m * 60).toFixed(1).padStart(4, "0")}`;
@@ -57,6 +60,7 @@ function TakeRow({ slot, take, onKeep, onRetake }: { slot: number; take: TakeInf
           {stateWords[take.state]}
         </span>
       </div>
+      {take.recognised === false && <span className="small-note">Too old to follow comps</span>}
       <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
         {take.state === "review" && (
           <>
@@ -149,6 +153,7 @@ export function SlotTab({ engine, views, slot, camerasAllowed, onKeep, onRetake,
   onRetake: (slot: number) => void;
   onReset: (slot: number) => void;
 }) {
+  const [showAll, setShowAll] = useState(false);
   const v = views[slot];
   if (!v) return null;
   const take = v.shown;
@@ -221,8 +226,13 @@ export function SlotTab({ engine, views, slot, camerasAllowed, onKeep, onRetake,
           <p className="small-note" style={{ margin: 0 }}>Arm, then record in Live. Each take lands here for you to keep or redo.</p>
         ) : (
           <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
-            {v.takes.map((t) => <TakeRow key={t.id} slot={slot} take={t} onKeep={() => onKeep(slot)} onRetake={() => onRetake(slot)} />)}
+            {(showAll ? v.takes : v.takes.slice(0, LISTED)).map((t) => <TakeRow key={t.id} slot={slot} take={t} onKeep={() => onKeep(slot)} onRetake={() => onRetake(slot)} />)}
           </ul>
+        )}
+        {v.takes.length > LISTED && (
+          <button type="button" className="link" style={{ marginTop: 6 }} onClick={() => setShowAll(!showAll)}>
+            {showAll ? "Show fewer" : `Show all ${v.takes.length}`}
+          </button>
         )}
         {v.mine && (engine.framesDropped ?? 0) > 0 && <p className="error-line">{engine.framesDropped} camera frames were dropped in the last take.</p>}
         {!v.kept && (

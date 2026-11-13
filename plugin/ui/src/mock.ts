@@ -357,7 +357,9 @@ export function createMock() {
   function finishTake(slot: number) {
     const x = slots[slot];
     x.recording = false;
-    x.takes = [take(nextId++, "review", x.recordStartPpq, Math.max(1, (ppqNow() - x.recordStartPpq) / 2)), ...x.takes.filter((t) => t.state !== "review")];
+    // A take still in review is archived, not dropped: Live keeps the replaced recording, so its video stays.
+    x.takes = [take(nextId++, "review", x.recordStartPpq, Math.max(1, (ppqNow() - x.recordStartPpq) / 2)),
+      ...x.takes.map((t) => (t.state === "review" ? { ...t, state: "archived" as const } : t))];
   }
 
   function engineStatus() {
@@ -381,7 +383,7 @@ export function createMock() {
     }
     const recording = me >= 0 && !!slots[me]?.recording;
     return {
-      session, sessionFolder: `${outputFolder}/Sessions/${session}`, slot: Math.max(0, me), instances: slots.filter((x) => x.claimed).length + (me < 0 ? 1 : 0),
+      session, sessionFolder: `${outputFolder}/Sessions/${session}`, takesBytes: 412_000_000, slot: Math.max(0, me), instances: slots.filter((x) => x.claimed).length + (me < 0 ? 1 : 0),
       recording, armed: me >= 0 && !!slots[me]?.armed, master: me < 0, error: "",
       recordHint: me >= 0 && slots[me]?.armed && !slots[me]?.recording && !playing ? `Armed. Press play in Live to record slot ${me + 1}.` : "",
       claimedMask: slots.reduce((m, x, i) => (x.claimed ? m | (1 << i) : m), 0),

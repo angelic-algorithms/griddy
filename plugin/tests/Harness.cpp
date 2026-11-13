@@ -799,7 +799,8 @@ void loopRecord()
 }
 
 // A new take replaces a take still in review. The old one may be huge (a long take is tens of thousands
-// of frame files); throwing it away must not delay the new take becoming playable.
+// of frame files); archiving it must not delay the new take becoming playable. It used to be discarded; Live keeps the
+// replaced recording on its take lanes, so now it is archived and stays recognisable.
 void replaceBigReview()
 {
     auto w = makeWorld (1);
@@ -813,7 +814,11 @@ void replaceBigReview()
     auto& next = w->add (recordTake (*w->engine, 0, 3.0, performance (62, 3.0), 10.0));
     metric ("stop with a big take to discard", next.stopSeconds * 1000.0, "ms");
     check (next.stopSeconds < 0.5, "a new take finishes at once even when a big review take is replaced (" + juce::String (next.stopSeconds, 3) + " s)");
-    check (! old.entry.folder.exists(), "the replaced take is out of the history at once");
+    {
+        TakeMeta m;
+        check (readTakeMeta (old.entry.folder, m) && m.state == TakeMeta::State::archived, "the replaced take is archived at once, not deleted");
+        check (w->engine->history().inReview (0).has_value() && w->engine->history().inReview (0)->meta.takeId == next.id(), "the new take is the one in review");
+    }
 
     const auto t0 = steadyNowSeconds();
     w->engine->reloadSlot (0);

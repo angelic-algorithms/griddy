@@ -69,11 +69,15 @@ bool TakeHistory::finishTake (const Entry& finished)
 {
     const std::scoped_lock sl (lock);
 
-    // A take already waiting in review is superseded by a newer one: it can no longer be reviewed.
+    // A take already waiting in review is superseded by a newer one: it can no longer be reviewed, but Live keeps
+    // the replaced recording on its take lanes, so its video is archived to stay recognisable and restorable.
     for (auto& other : scan (finished.meta.slot))
     {
         if (other.meta.takeId != finished.meta.takeId && other.meta.state == TakeMeta::State::review)
-            discard (other);
+        {
+            other.meta.state = TakeMeta::State::archived;
+            save (other);
+        }
     }
 
     Entry e = finished;
@@ -188,14 +192,14 @@ std::optional<TakeHistory::Entry> TakeHistory::inReview (int slot) const
     return std::nullopt;
 }
 
-std::vector<TakeHistory::Entry> TakeHistory::listed (int slot) const
+std::vector<TakeHistory::Entry> TakeHistory::listed (int slot, int limit) const
 {
     const std::scoped_lock sl (lock);
     std::vector<Entry> out;
 
     for (auto& e : scan (slot))
         if (e.meta.state == TakeMeta::State::kept || e.meta.state == TakeMeta::State::archived || e.meta.state == TakeMeta::State::review)
-            if ((int) out.size() < maxListed)
+            if ((int) out.size() < limit)
                 out.push_back (std::move (e));
 
     return out;
@@ -203,7 +207,17 @@ std::vector<TakeHistory::Entry> TakeHistory::listed (int slot) const
 
 std::vector<TakeHistory::Entry> TakeHistory::playable (int slot) const
 {
-    auto all = listed (slot);
+    auto all = listed (slot, maxRecognised);
+
+    // The kept take always plays, even when more than maxRecognised newer takes were recorded over it.
+    if (std::none_of (all.begin(), all.end(), [] (const Entry& e) { return e.meta.state == TakeMeta::State::kept; }))
+        if (auto k = active (slot); k.has_value())
+        {
+            if ((int) all.size() >= maxRecognised)
+                all.pop_back();
+            all.push_back (*k);
+        }
+
     auto rank = [] (const Entry& e)
     {
         switch (e.meta.state)

@@ -265,6 +265,7 @@ private:
     juce::String exportError;    // guarded by statusLock
 
     juce::ThreadPool worker { 1 };
+    std::atomic<int64_t> takesBytes { -1 }; // disk use of this session's takes, measured on the cleaner after each change
     juce::ThreadPool cleaner { 1 }; // deletes discarded takes, so a big delete never holds up the next take
 
     Compositor compositor;

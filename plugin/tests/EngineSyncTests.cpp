@@ -331,6 +331,32 @@ struct TakeHistoryTests : juce::UnitTest
         expectEquals ((int) h.listed (1).size(), 5);
         expect (many.front().folder.isDirectory(), "oldest take is still on disk");
 
+        beginTest ("a new take over a take in review archives it, and Retake still discards");
+        auto r1 = makeTake (h, 3);
+        auto r2 = makeTake (h, 3);
+        expect (r1.folder.isDirectory(), "the replaced review take stays on disk");
+        expectEquals ((int) h.inReview (3)->meta.takeId, (int) r2.meta.takeId);
+        {
+            const auto l = h.listed (3);
+            expectEquals ((int) l.size(), 2);
+            expect (l[1].meta.takeId == r1.meta.takeId && l[1].meta.state == TakeMeta::State::archived, "the replaced take is archived");
+            const auto p = h.playable (3);
+            expect (p.size() == 2 && p.front().meta.takeId == r2.meta.takeId, "the new take plays; the replaced one is still recognised");
+        }
+        expect (h.restore (3, r1.meta.takeId), "the replaced take can be restored");
+        expectEquals ((int) h.active (3)->meta.takeId, (int) r1.meta.takeId);
+        auto r3 = makeTake (h, 3);
+        expect (h.retake (3, r3.meta.takeId));
+        expect (! r3.folder.exists(), "Retake deletes the new take");
+        expectEquals ((int) h.listed (3).size(), 2);
+
+        beginTest ("the sync recognises up to maxRecognised takes and lists all of them on request");
+        for (int i = 0; i < TakeHistory::maxRecognised + 3; ++i)
+            makeTake (h, 4);
+        expectEquals ((int) h.all (4).size(), TakeHistory::maxRecognised + 3);
+        expectEquals ((int) h.playable (4).size(), TakeHistory::maxRecognised);
+        expectEquals ((int) h.listed (4).size(), TakeHistory::maxListed);
+
         beginTest ("slip is saved with the take");
         expect (h.setSlip (0, a.meta.takeId, 0.035));
         expectWithinAbsoluteError (h.active (0)->meta.slipSeconds, 0.035, 1.0e-9);

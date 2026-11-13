@@ -799,7 +799,16 @@ void Hub::purgeLater()
         root = engine->history().root();
     }
 
-    cleaner.addJob ([root] { TakeHistory::purgeDiscarded (root); });
+    cleaner.addJob ([this, root]
+    {
+        TakeHistory::purgeDiscarded (root);
+
+        // What the session's takes use on disk, for the Setup tab. Walking every frame file is slow, so it is done here.
+        int64_t bytes = 0;
+        for (const auto& f : root.findChildFiles (juce::File::findFiles, true))
+            bytes += f.getSize();
+        takesBytes = bytes;
+    });
 }
 
 void Hub::disarmLater (Member* member)
@@ -1376,10 +1385,14 @@ juce::var Hub::takesToVar (int slot) const
     if (engine == nullptr)
         return list;
 
-    for (const auto& e : engine->history().listed (slot))
+    // Every take, newest first. The UI shows the newest few and the rest on request; past the cap the sync no longer
+    // recognises a take, so the UI says so.
+    int index = 0;
+    for (const auto& e : engine->history().all (slot))
     {
         auto o = std::make_unique<juce::DynamicObject>();
         o->setProperty ("id", e.meta.takeId);
+        o->setProperty ("recognised", index++ < TakeHistory::maxRecognised);
         o->setProperty ("state", e.meta.state == TakeMeta::State::kept ? "kept"
                                : e.meta.state == TakeMeta::State::review ? "review" : "archived");
         o->setProperty ("seconds", e.meta.durationSeconds);
@@ -1422,7 +1435,7 @@ juce::var Hub::takePeaks (int slot, int takeId) const
     {
         const std::scoped_lock sl (engineLock);
         if (engine != nullptr && juce::isPositiveAndBelow (slot, maxSlots))
-            for (const auto& e : engine->history().listed (slot))
+            for (const auto& e : engine->history().all (slot))
                 if (e.meta.takeId == takeId)
                     folder = e.folder;
     }
@@ -1441,6 +1454,7 @@ juce::var Hub::getStatus (const Member* member) const
     auto obj = std::make_unique<juce::DynamicObject>();
     obj->setProperty ("session", getSession());
     obj->setProperty ("sessionFolder", getSessionFolder().getFullPathName());
+    obj->setProperty ("takesBytes", (juce::int64) takesBytes.load());
     obj->setProperty ("resetPending", mySlot >= 0 && resetRequested[(size_t) mySlot].load());
     obj->setProperty ("slot", mySlot);
     obj->setProperty ("targetSlot", mySlot);

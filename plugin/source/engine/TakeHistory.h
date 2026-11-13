@@ -2,6 +2,7 @@
 
 #include "TakeFormat.h"
 
+#include <limits>
 #include <mutex>
 #include <optional>
 #include <vector>
@@ -15,14 +16,16 @@ namespace griddy
         recording -> review      (recording stopped)
         review    -> kept        (Keep: becomes the slot's active take, the old active take is archived)
         review    -> discarded   (Retake: the media is deleted, the old active take stays active)
+        review    -> archived    (a newer take finished: Live still has the replaced take, so its video stays)
         archived  -> kept        (Restore: swaps with the current active take)
 
-    Nothing that was ever kept is deleted. The list shown to the user is the newest five
-    takes that were not discarded; older ones stay on disk.
+    Only Retake deletes. The list shown to the user is the newest five takes that were not
+    discarded, and all of them on request; older ones stay on disk.
 
     Replacement rule: the slot plays what its audio is. The newest take that is in review or
-    kept is the one a fresh slot shows, and every take still in history is a candidate the
-    fingerprint matcher can recognise, so an old clip that is still on the timeline keeps its old video.
+    kept is the one a fresh slot shows, and the newest maxRecognised takes are candidates the
+    sync can recognise, so an old clip that is still on the timeline keeps its old video and a
+    comp of several takes shows each piece's own video.
 */
 class TakeHistory
 {
@@ -34,6 +37,10 @@ public:
     };
 
     static constexpr int maxListed = 5;
+
+    /** How many takes per slot the sync recognises, newest first. Measured: see the bench scenario
+        and docs/engine-design.md (Comping). Older takes stay listed and restorable. */
+    static constexpr int maxRecognised = 20;
 
     explicit TakeHistory (juce::File rootFolder);
 
@@ -63,10 +70,14 @@ public:
     /** The take in review, if any. */
     std::optional<Entry> inReview (int slot) const;
 
-    /** Newest first, at most maxListed, never including discarded takes. */
-    std::vector<Entry> listed (int slot) const;
+    /** Newest first, at most `limit`, never including discarded takes. */
+    std::vector<Entry> listed (int slot, int limit = maxListed) const;
 
-    /** What the slot should be able to play and recognise: the review take, the active take, then the archived ones. */
+    /** Every take of the slot that was not discarded, newest first. */
+    std::vector<Entry> all (int slot) const { return listed (slot, std::numeric_limits<int>::max()); }
+
+    /** What the slot should be able to play and recognise, at most maxRecognised: the review take, the active take,
+        then the archived ones. */
     std::vector<Entry> playable (int slot) const;
 
     juce::File slotFolder (int slot) const;

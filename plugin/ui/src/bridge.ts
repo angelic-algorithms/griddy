@@ -54,6 +54,8 @@ export type TakeInfo = {
   timeSig?: string;
   fps?: number;
   latencyMs?: number;
+  /** False past the recognition cap: the take is kept and restorable, but its video no longer follows comps. */
+  recognised?: boolean;
 };
 
 export type SlotInfo = {
@@ -100,6 +102,8 @@ export type ExportStatus = {
 export type EngineStatus = {
   session: string;
   sessionFolder?: string;
+  /** Disk use of this session's takes in bytes; -1 until measured. */
+  takesBytes?: number;
   resetPending?: boolean;
   slot: number;
   instances: number;

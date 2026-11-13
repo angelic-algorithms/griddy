@@ -6,6 +6,12 @@ import { SlotView } from "./model";
 import { AskFirst, ResetSlot } from "./Recover";
 import { SyncChip } from "./SlotTab";
 
+function diskSize(bytes: number) {
+  if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(1)} GB`;
+  if (bytes >= 1e6) return `${Math.round(bytes / 1e6)} MB`;
+  return `${Math.max(1, Math.round(bytes / 1e3))} KB`;
+}
+
 function MasterToggle() {
   const on = useParam(params.master);
   return (
@@ -31,6 +37,7 @@ export function SetupTab({ engine, status, views, say }: { engine: EngineStatus;
         <Label>Session</Label>
         <p className="path" title={engine.sessionFolder}>{engine.session}</p>
         <p className="small-note" style={{ margin: "4px 0 8px" }}>Takes for this set are saved in this folder. Saving your set keeps it; a new set or a template starts its own.</p>
+        {(engine.takesBytes ?? -1) >= 0 && <p className="small-note" style={{ margin: "0 0 8px" }}>Takes in this session use {diskSize(engine.takesBytes ?? 0)}.</p>}
         <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
           <Btn small onClick={() => api.revealSessionFolder()}>Show folder</Btn>
           <AskFirst
