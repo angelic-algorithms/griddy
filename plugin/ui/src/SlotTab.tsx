@@ -87,7 +87,7 @@ function TakeRow({ slot, take, playing, track, onKeep, onRetake }: { slot: numbe
   );
 }
 
-/** Which camera fills a slot. Cameras and test patterns, as the camera pads offered. */
+/** Which camera fills a slot, as camera pads. Clicking the camera that is on turns it off. */
 function CameraPicker({ slot, camerasAllowed }: { slot: number; camerasAllowed: boolean }) {
   const [devices, setDevices] = useState<Device[]>([]);
   const [sources, setSources] = useState<string[]>([]);
@@ -100,35 +100,28 @@ function CameraPicker({ slot, camerasAllowed }: { slot: number; camerasAllowed: 
   };
   useEffect(() => void refresh(), []);
 
-  const cameras = devices.filter((d) => d.kind === "camera");
-  const tests = devices.filter((d) => d.kind !== "camera");
+  const current = sources[slot] ?? "";
+  const pick = async (id: string) => {
+    const r = await api.setSlotSource(slot, id === current ? "" : id);
+    setSources(r.slots);
+    setError(r.ok ? "" : r.error);
+  };
 
   return (
     <div>
       <Label>Camera</Label>
-      <select
-        id="slot-camera"
-        className="select"
-        value={sources[slot] ?? ""}
-        aria-label={`Camera for slot ${slot + 1}`}
-        onChange={async (e) => {
-          const r = await api.setSlotSource(slot, e.target.value);
-          setSources(r.slots);
-          setError(r.ok ? "" : r.error);
-        }}
-      >
-        <option value="">Empty</option>
-        {cameras.length > 0 && (
-          <optgroup label="Cameras and capture cards">
-            {cameras.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
-          </optgroup>
-        )}
-        <optgroup label="Test patterns">
-          {tests.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
-        </optgroup>
-      </select>
-      <div className="row" style={{ justifyContent: "space-between", marginTop: 8 }}>
-        <span className="small-note">{camerasAllowed ? "" : "Only test patterns are available here. See the message at the top."}</span>
+      <div role="group" aria-label={`Camera for slot ${slot + 1}`} className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+        {devices.map((d) => (
+          <Btn key={d.id} small color={d.id === current ? "lime" : "bone"} pressed={d.id === current} onClick={() => pick(d.id)}
+            title={d.id === current ? `${d.name} is on. Click to turn it off.` : `Use ${d.name}`}>
+            {d.name}
+          </Btn>
+        ))}
+      </div>
+      <div className="row" style={{ justifyContent: "space-between", marginTop: 8, gap: 8 }}>
+        <span className="small-note">
+          {!camerasAllowed ? "Cameras are blocked here. See the message at the top." : devices.length === 0 ? "No cameras found." : current === "" ? "Camera off." : ""}
+        </span>
         <button type="button" className="link" onClick={refresh} title="Look for newly plugged in cameras">Rescan cameras</button>
       </div>
       {error && <p className="error-line">{error}</p>}

@@ -36,8 +36,15 @@ struct CaptureDeviceInfo
     juce::String kind;  // "camera", "test"
 };
 
-/** Lists every source available right now: test patterns first, then real devices. */
+/** Lists every source available right now: real cameras and capture cards. Test patterns come first, but only
+    when testPatternsEnabled(). */
 std::vector<CaptureDeviceInfo> listCaptureDevices();
+
+/** Test patterns are for the harness, the smoke test and CI only: set GRIDDY_TEST_PATTERNS to get them. */
+bool testPatternsEnabled();
+
+/** The camera a new slot starts with: the FaceTime HD camera, else the first camera, else none (empty). */
+juce::String defaultCameraId();
 
 /** Creates a source for an id from listCaptureDevices(), or nullptr if it's gone. */
 std::unique_ptr<CaptureSource> createCaptureSource (const juce::String& id, FrameStore& store);

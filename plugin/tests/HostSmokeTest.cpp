@@ -7,6 +7,7 @@
 //   * the WebView editor opens and closes without crashing
 //
 // Usage: GriddyHostSmokeTest /path/to/Griddy.vst3   (run under xvfb-run on a headless Linux box)
+#include <cstdlib>
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_gui_basics/juce_gui_basics.h>
 
@@ -116,6 +117,7 @@ int main (int argc, char** argv)
     }
 
     ScopedJuceInitialiser_GUI init;
+    setenv ("GRIDDY_TEST_PATTERNS", "1", 1); // tests record test pattern cameras; the plugin itself never offers them
     AudioPluginFormatManager fm;
     addDefaultFormatsToManager (fm);
 

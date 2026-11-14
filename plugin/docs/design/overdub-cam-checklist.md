@@ -117,7 +117,7 @@ Also changed: a new set starts like the mockup, an orange frame 6 thick with cor
 - Arm: header Rec and the R key
 - Master: Setup tab
 - Slot picker: Slot tab, Assigned track
-- Camera pads and test patterns: Slot tab, Camera
+- Camera pads: Slot tab, Camera. Clicking the camera that is on turns it off. No test patterns.
 - Cameras blocked banner: under the header
 - Record hint: chip under the grid
 - Sync chip with every status and the warp warning: Slot tab take list, Setup tab Every slot

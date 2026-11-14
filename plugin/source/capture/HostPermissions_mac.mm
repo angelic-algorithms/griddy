@@ -77,14 +77,14 @@ bool hostAllowsCameraAccess (juce::String& reason)
     if ([host objectForInfoDictionaryKey: @"NSCameraUsageDescription"] == nil)
     {
         reason = hostName + " doesn't ask macOS for camera access, so cameras can't be used inside it. "
-                            "Use the Griddy standalone app for cameras, or test patterns here.";
+                            "Use the Griddy standalone app for cameras.";
         return false;
     }
 
     if (processUsesHardenedRuntime() && ! processHasEntitlement (CFSTR ("com.apple.security.device.camera")))
     {
         reason = hostName + " isn't signed with the camera entitlement, so macOS would close it if a plugin "
-                            "opened a camera. Use the Griddy standalone app for cameras, or test patterns here.";
+                            "opened a camera. Use the Griddy standalone app for cameras.";
         return false;
     }
 

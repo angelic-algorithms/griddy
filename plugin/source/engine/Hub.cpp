@@ -28,9 +28,11 @@ Hub::Hub()
     // The hub draws the grid (live cameras where a slot has no take, takes where it has).
     videoEngine.setComposeEnabled (false);
 
-    // A fresh set starts with test patterns so there is something on screen before a camera is picked.
-    for (int slot = 0; slot < 4; ++slot)
-        videoEngine.setSlotSource (slot, "test:" + juce::String (slot + 1));
+    // Tests start with test patterns so there is something to record. In a DAW each track's Griddy picks its own
+    // camera (see GriddyProcessor), so nothing is opened here.
+    if (testPatternsEnabled())
+        for (int slot = 0; slot < 4; ++slot)
+            videoEngine.setSlotSource (slot, "test:" + juce::String (slot + 1));
 
     videoEngine.startEngine();
     sessionId = juce::Uuid().toDashedString();

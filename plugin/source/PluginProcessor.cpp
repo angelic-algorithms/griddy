@@ -63,6 +63,35 @@ GriddyProcessor::GriddyProcessor()
     };
 
     member = hub->addMember (controls);
+    startTimer (200);
+}
+
+void GriddyProcessor::timerCallback()
+{
+    // Wait for the hub to give this track its slot; a master never has one.
+    const auto slot = member->slot.load();
+    if (cameraDecided || ++cameraTries > 25 || (slot < 0 && cameraTries > 5))
+    {
+        stopTimer();
+        return;
+    }
+    if (slot < 0)
+        return;
+
+    stopTimer();
+    cameraDecided = true;
+    if (hub->video().getSlotSources()[(size_t) slot].isEmpty())
+        if (const auto id = defaultCameraId(); id.isNotEmpty())
+            hub->video().setSlotSource (slot, id);
+}
+
+void GriddyProcessor::cameraPicked (int slot, const juce::String& source)
+{
+    if (slot == member->slot.load())
+    {
+        cameraDecided = true;
+        cameraOff = source.isEmpty();
+    }
 }
 
 void GriddyProcessor::updateTrackProperties (const TrackProperties& properties)
@@ -153,6 +182,7 @@ void GriddyProcessor::getStateInformation (juce::MemoryBlock& destData)
     const auto slot = member->slot.load();
     const auto sources = hub->video().getSlotSources();
     state.setProperty ("source", slot >= 0 ? sources[(size_t) slot] : juce::String(), nullptr);
+    state.setProperty ("cameraOff", slot >= 0 && sources[(size_t) slot].isEmpty() && cameraOff, nullptr);
     state.setProperty ("outputFolder", hub->video().getOutputFolder().getFullPathName(), nullptr);
     state.setProperty ("session", hub->getSession(), nullptr);
     state.setProperty ("sessionTakes", session::encodeTakeIds (hub->sessionTakes()), nullptr);
@@ -188,11 +218,18 @@ void GriddyProcessor::setStateInformation (const void* data, int sizeInBytes)
 
     hub->loadSession (member, state.getProperty ("session").toString(), savedTakes);
 
-    // If a camera from last session is unplugged, the slot just shows "no camera".
-    const auto source = state.getProperty ("source").toString();
+    // If a camera from last session is unplugged, the slot just shows "no camera". A set saved with a test pattern
+    // (older builds started with them) gets the default camera instead, and one saved with its camera off stays off.
+    auto source = state.getProperty ("source").toString();
     const auto slot = (int) std::lround (parameters.getRawParameterValue (ParamIDs::slot)->load()) - 1;
-    if (source.isNotEmpty() && juce::isPositiveAndBelow (slot, Hub::maxSlots))
-        hub->video().setSlotSource (slot, source);
+    cameraOff = (bool) state.getProperty ("cameraOff", false);
+    if (source.startsWith ("test:") && ! testPatternsEnabled())
+        source = defaultCameraId();
+    if (juce::isPositiveAndBelow (slot, Hub::maxSlots) && (source.isNotEmpty() || cameraOff))
+    {
+        hub->video().setSlotSource (slot, cameraOff ? juce::String() : source);
+        cameraDecided = true;
+    }
 }
 
 } // namespace griddy

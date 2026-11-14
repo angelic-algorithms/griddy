@@ -55,7 +55,7 @@ Put pieces of several takes together in Live's take lanes and each piece shows i
 
 ## The real limits (read this before testing in Ableton)
 
-**Camera permission belongs to the DAW, not the plugin.** A plugin is a library inside the DAW's process, so macOS checks the DAW's `Info.plist` and entitlements. If the DAW never declared `NSCameraUsageDescription`, or it uses the hardened runtime without the camera entitlement, macOS **kills the whole DAW** the moment anything in it opens a camera ([this happened to the SPARTA plugins in Reaper](https://github.com/leomccormack/SPARTA/issues/82)). Griddy checks this before touching AVFoundation (`source/capture/HostPermissions_mac.mm`) and, if the host can't use cameras, shows a banner and offers test patterns only. It never crashes your session.
+**Camera permission belongs to the DAW, not the plugin.** A plugin is a library inside the DAW's process, so macOS checks the DAW's `Info.plist` and entitlements. If the DAW never declared `NSCameraUsageDescription`, or it uses the hardened runtime without the camera entitlement, macOS **kills the whole DAW** the moment anything in it opens a camera ([this happened to the SPARTA plugins in Reaper](https://github.com/leomccormack/SPARTA/issues/82)). Griddy checks this before touching AVFoundation (`source/capture/HostPermissions_mac.mm`) and, if the host can't use cameras, shows a banner and opens no camera. It never crashes your session.
 
 **Ableton Live 12 Suite passes.** Its `Info.plist` declares `NSCameraUsageDescription` ("A plug-in or Max for Live device requires access to the camera.") and its signature carries `com.apple.security.device.camera`, so Griddy can open cameras inside Live. The first time it does, macOS asks once whether Live may use the camera. To check another DAW:
 
@@ -70,7 +70,7 @@ Some hosts run plugins in a separate helper process. When that happens the check
 
 **Other limits**
 
-* Camera capture is macOS only for now. Windows (Media Foundation) and Linux (V4L2) get test patterns until those backends are written.
+* Camera capture is macOS only for now. Windows (Media Foundation) and Linux (V4L2) have no cameras until those backends are written.
 * Compositing is on the CPU (JUCE's software renderer). Fine for 4 cameras at 720p; the GPU path (Metal or Core Image) is on the list for 1080p and more cameras.
 * The AU and VST3 must be code signed and notarized before you share them with anyone else, or macOS Gatekeeper blocks them. Building for yourself doesn't need that.
 * Licensing: JUCE is AGPLv3 or the JUCE licence. The free Starter tier covers up to $20K of revenue or funding in the last 12 months; past that you need Indie or Pro, or release the source under AGPL. Check the [JUCE 9 licence](https://juce.com/legal/juce-9-licence/) before selling it.
@@ -109,7 +109,7 @@ Prefer Xcode? `cmake -S . -B xcode -G Xcode` and open `xcode/Griddy.xcodeproj`.
 ### First test
 
 1. Run the Standalone app first (`build/Griddy_artefacts/Release/Standalone/Griddy.app`). It has its own camera permission, so macOS asks once. Pick your FaceTime camera, Continuity Camera (iPhone) and capture card in the slots and confirm the preview.
-2. In Live, rescan plugins, drop Griddy on any audio track. If the banner says cameras are blocked, that's the permission limit above; the test patterns still show you sync and recording working.
+2. In Live, rescan plugins, drop Griddy on any audio track. Its slot starts with the FaceTime HD camera (or the first camera it finds). Click a camera in the Slot tab to switch to it, or click the one that is on to turn it off. If the banner says cameras are blocked, that's the permission limit above.
 3. Press play and watch the transport readout follow the DAW. Take recording returns with the engine milestone.
 
 ## UI mockups
@@ -132,7 +132,8 @@ On Linux in this repo's first pass:
 
 * `GriddyTests`: layout math, beat clock (tempo extrapolation, stopped transport, 7/8, float edge cases), the lock free transport snapshot under a racing writer, the compositor's pixels, the frame store and test pattern threads.
 * `GriddyHostSmokeTest`: a fake DAW loads the built VST3, checks the parameters, plays at 100 BPM from bar 3, confirms audio passes through untouched, opens and closes the WebView editor, and restores state into a new instance.
-* The Standalone app renders the React UI with live test pattern previews.
+* The Standalone app renders the React UI with live camera previews.
+* Test patterns are for tests only: the harness, the unit tests and the smoke test set `GRIDDY_TEST_PATTERNS=1`, and the plugin never lists them otherwise.
 
 Not yet compiled or run anywhere: `AVFoundationCapture.mm`, `HostPermissions_mac.mm`, the AU inside a real DAW. The macOS job in `.github/workflows/plugin.yml` compiles all of it, runs both test programs and runs `auval`.
 

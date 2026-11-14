@@ -7,12 +7,14 @@
 // and compare it with where the audio really is.
 //
 // Usage: GriddyHarness [scenario ...] [--soak-seconds N] [--big]   (no arguments runs everything but the soak)
+#include <cstdlib>
 #include <juce_core/juce_core.h>
 #include <juce_events/juce_events.h>
 #include <juce_graphics/juce_graphics.h>
 
 #include "HubScenarios.h"
 #include "TestSignals.h"
+#include "capture/CaptureSource.h"
 #include "engine/GpuCompositor.h"
 #include "engine/GridExport.h"
 #include "engine/MovTake.h"
@@ -1359,6 +1361,28 @@ void compSilentTake()
 }
 
 // A slot no Griddy owns only follows the position: no black, no comps (the leader feeds it silence).
+// The plugin never offers test patterns: they exist for the harness, the smoke test and CI only.
+void noTestPatterns()
+{
+    const auto hasTest = []
+    {
+        for (const auto& d : griddy::listCaptureDevices())
+            if (d.kind == "test" || d.id.startsWith ("test:"))
+                return true;
+        return false;
+    };
+
+    griddy::FrameStore store;
+    unsetenv ("GRIDDY_TEST_PATTERNS");
+    check (! griddy::testPatternsEnabled() && ! hasTest(), "without GRIDDY_TEST_PATTERNS no test pattern is listed");
+    check (griddy::createCaptureSource ("test:1", store) == nullptr, "and a set saved with a test pattern cannot open one");
+    check (! griddy::defaultCameraId().startsWith ("test:"), "and the default camera is never a test pattern");
+
+    setenv ("GRIDDY_TEST_PATTERNS", "1", 1);
+    check (griddy::testPatternsEnabled() && hasTest(), "with it, the tests get their test patterns");
+    check (! griddy::defaultCameraId().startsWith ("test:"), "and the default camera is still never a test pattern");
+}
+
 void compUnowned()
 {
     auto w = makeWorld (1);
@@ -2064,6 +2088,7 @@ int main (int argc, char** argv)
 {
     juce::ScopedJuceInitialiser_GUI init;
 
+    setenv ("GRIDDY_TEST_PATTERNS", "1", 1); // tests record test pattern cameras; the plugin itself never offers them
     // Nothing the harness runs may write to the real takes folder.
     const auto scratch = juce::File::createTempFile ("griddy-harness-takes");
     setenv ("GRIDDY_TAKES_FOLDER", scratch.getFullPathName().toRawUTF8(), 1);
@@ -2108,6 +2133,7 @@ int main (int argc, char** argv)
         { "comp_end", compEnd, true },
         { "comp_silent_take", compSilentTake, true },
         { "comp_unowned", compUnowned, true },
+        { "no_test_patterns", noTestPatterns, true },
         { "comp_recording_load", compRecordingLoad, true },
         { "comp_bench", compBench, true },
         { "bench", bench, true },

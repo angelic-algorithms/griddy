@@ -1,3 +1,4 @@
+#include <cstdlib>
 #include <juce_core/juce_core.h>
 #include <juce_gui_basics/juce_gui_basics.h>
 
@@ -6,6 +7,7 @@
 int main()
 {
     juce::ScopedJuceInitialiser_GUI init; // fonts and images need the message manager set up
+    setenv ("GRIDDY_TEST_PATTERNS", "1", 1); // tests record test pattern cameras; the plugin itself never offers them
 
     juce::UnitTestRunner runner;
     runner.setAssertOnFailure (false);

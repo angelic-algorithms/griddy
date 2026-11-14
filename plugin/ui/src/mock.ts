@@ -65,14 +65,10 @@ export function createMock() {
   const emit = (name: string, payload: unknown) => listeners.get(name)?.forEach((fn) => fn(payload));
 
   const devices = [
-    { id: "test:1", name: "Test pattern 1", kind: "test" },
-    { id: "test:2", name: "Test pattern 2", kind: "test" },
-    { id: "test:3", name: "Test pattern 3", kind: "test" },
-    { id: "test:4", name: "Test pattern 4", kind: "test" },
     { id: "av:mock-facetime", name: "FaceTime HD Camera (mock)", kind: "camera" },
     { id: "av:mock-iphone", name: "iPhone Camera (mock)", kind: "camera" },
   ];
-  let sources = ["av:mock-facetime", "test:2", "test:3", "test:4", "", "", "", "", ""];
+  let sources = ["av:mock-facetime", "av:mock-iphone", "av:mock-facetime", "av:mock-facetime", "", "", "", "", ""];
   let outputFolder = "/Users/you/Movies/Griddy";
   let serial = 0;
   let start = performance.now();
@@ -252,7 +248,7 @@ export function createMock() {
           claim(2, { armed: true });
         }
     }
-    sources = slots.map((s, i) => (s.claimed ? (i === 0 ? "av:mock-facetime" : `test:${(i % 4) + 1}`) : ""));
+    sources = slots.map((s, i) => (s.claimed ? (i === 1 ? "av:mock-iphone" : "av:mock-facetime") : ""));
     emit("status", status());
   }
 

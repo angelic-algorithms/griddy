@@ -73,6 +73,8 @@ juce::WebBrowserComponent::Options GriddyEditor::makeBrowserOptions()
             const auto slot = args.size() > 0 ? (int) args[0] : -1;
             const auto source = args.size() > 1 ? args[1].toString() : juce::String();
             const auto error = engine.setSlotSource (slot, source);
+            if (error.isEmpty())
+                processor.cameraPicked (slot, source);
 
             auto result = std::make_unique<juce::DynamicObject>();
             result->setProperty ("ok", error.isEmpty());
