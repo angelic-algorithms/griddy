@@ -1,0 +1,133 @@
+/* The Overdub Cam look (docs/design/overdub-cam.html): a street poster pinned to a chain link fence,
+   canvas left, taped inspector right, timeline under the canvas. Values are the mockup's. */
+
+@font-face { font-family: "Bungee"; font-style: normal; font-weight: 400; font-display: block;
+  src: url("../node_modules/@fontsource/bungee/files/bungee-latin-400-normal.woff2") format("woff2"); }
+@font-face { font-family: "Permanent Marker"; font-style: normal; font-weight: 400; font-display: block;
+  src: url("../node_modules/@fontsource/permanent-marker/files/permanent-marker-latin-400-normal.woff2") format("woff2"); }
+@font-face { font-family: "Barlow Condensed"; font-style: normal; font-weight: 500; font-display: block;
+  src: url("../node_modules/@fontsource/barlow-condensed/files/barlow-condensed-latin-500-normal.woff2") format("woff2"); }
+@font-face { font-family: "Barlow Condensed"; font-style: normal; font-weight: 600; font-display: block;
+  src: url("../node_modules/@fontsource/barlow-condensed/files/barlow-condensed-latin-600-normal.woff2") format("woff2"); }
+@font-face { font-family: "Barlow Condensed"; font-style: normal; font-weight: 700; font-display: block;
+  src: url("../node_modules/@fontsource/barlow-condensed/files/barlow-condensed-latin-700-normal.woff2") format("woff2"); }
+@font-face { font-family: "Barlow Condensed"; font-style: normal; font-weight: 800; font-display: block;
+  src: url("../node_modules/@fontsource/barlow-condensed/files/barlow-condensed-latin-800-normal.woff2") format("woff2"); }
+
+/* ---- the mockup's style block ---- */
+:root{--asphalt:#141416;--paper:#f3efe4;--ink:#0b0b0d;--hot:#ff6a1a;--lime:#b8ff1f;--pink:#ff3fae;--sky:#35c6ff;--gold:#ffd400;--blood:#ff2e3e}
+*,*::before,*::after{box-sizing:border-box}
+html,body,#root{height:100%;margin:0}
+body{background-color:var(--asphalt);color:var(--paper);font-family:"Barlow Condensed","Arial Narrow",sans-serif;
+  background-image:
+   url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='240' height='240'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.8' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 .08 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>"),
+   repeating-linear-gradient(45deg,transparent 0 22px,rgba(255,255,255,.03) 22px 24px),
+   repeating-linear-gradient(-45deg,transparent 0 22px,rgba(255,255,255,.03) 22px 24px);
+  background-attachment:fixed}
+button{font-family:inherit}
+.paper{background:var(--paper);color:var(--ink);border:3px solid #000;box-shadow:6px 6px 0 #000}
+.tape::before{content:"";position:absolute;top:-11px;left:50%;width:74px;height:20px;transform:translateX(-50%) rotate(-3deg);background:rgba(255,226,120,.82);box-shadow:0 1px 0 rgba(0,0,0,.25);z-index:2}
+.tape-piece{background:rgba(255,226,120,.85);box-shadow:0 1px 0 rgba(0,0,0,.3);z-index:3}
+.btn{transform:skewX(-8deg);border:3px solid #000;box-shadow:3px 3px 0 #000;cursor:pointer;transition:transform .08s,box-shadow .08s,filter .08s;line-height:1.1}
+.btn>span{display:inline-block;transform:skewX(8deg)}
+.btn:hover:not(:disabled){filter:brightness(1.08)}
+.btn:active:not(:disabled){transform:skewX(-8deg) translate(2px,2px);box-shadow:1px 1px 0 #000}
+.btn:focus-visible,.nudge:focus-visible,.tile:focus-visible{outline:3px solid #fff;outline-offset:2px}
+.btn:disabled{opacity:.4;cursor:not-allowed}
+.nudge{color:var(--sky);font-size:13px;padding:2px 6px;cursor:pointer;background:transparent;border:0}
+.nudge:hover{color:#fff}
+.hatch{background:repeating-linear-gradient(45deg,#17171b 0 10px,#202027 10px 20px)}
+.scan{background:repeating-linear-gradient(0deg,rgba(0,0,0,.16) 0 1px,transparent 1px 3px);mix-blend-mode:multiply}
+.vf{opacity:.85;background:
+ linear-gradient(#fff,#fff) 0 0/22px 3px no-repeat,linear-gradient(#fff,#fff) 0 0/3px 22px no-repeat,
+ linear-gradient(#fff,#fff) 100% 0/22px 3px no-repeat,linear-gradient(#fff,#fff) 100% 0/3px 22px no-repeat,
+ linear-gradient(#fff,#fff) 0 100%/22px 3px no-repeat,linear-gradient(#fff,#fff) 0 100%/3px 22px no-repeat,
+ linear-gradient(#fff,#fff) 100% 100%/22px 3px no-repeat,linear-gradient(#fff,#fff) 100% 100%/3px 22px no-repeat}
+.stripes-rec{background:repeating-linear-gradient(45deg,#ff2e3e 0 8px,#8f1522 8px 16px)}
+.ring-armed{animation:armed 1.6s ease-in-out infinite}
+.ring-rec{animation:armed .8s ease-in-out infinite}
+@keyframes armed{50%{box-shadow:inset 0 0 0 3px rgba(255,255,255,.35),0 0 18px rgba(255,255,255,.25)}}
+.blink{animation:blink 1s steps(2,jump-none) infinite}
+@keyframes blink{50%{opacity:.55}}
+.rec-pulse{animation:recp 1s ease-in-out infinite}
+@keyframes recp{50%{box-shadow:3px 3px 0 #000,0 0 0 5px rgba(255,46,62,.45)}}
+.count{animation:pop .5s ease-out}
+@keyframes pop{0%{transform:scale(1.5);opacity:0}60%{opacity:1}100%{transform:scale(1)}}
+.toast{animation:rise .2s ease-out}
+@keyframes rise{from{transform:translate(-50%,10px);opacity:0}to{transform:translate(-50%,0);opacity:1}}
+select,input{border-radius:0}
+@media (prefers-reduced-motion:reduce){.ring-armed,.ring-rec,.blink,.rec-pulse,.count,.toast{animation:none}}
+
+/* ---- the mockup's Tailwind theme as plain classes ---- */
+.f-sign{font-family:Bungee,Impact,sans-serif;font-weight:400}
+.f-tag{font-family:"Permanent Marker","Marker Felt",cursive;font-weight:400}
+.f-ui{font-family:"Barlow Condensed","Arial Narrow",sans-serif}
+.bg-hot{background:var(--hot);color:var(--ink)}
+.bg-lime{background:var(--lime);color:var(--ink)}
+.bg-pink{background:var(--pink);color:var(--ink)}
+.bg-sky{background:var(--sky);color:var(--ink)}
+.bg-gold{background:var(--gold);color:var(--ink)}
+.bg-blood{background:var(--blood);color:#fff}
+.bg-bone{background:var(--paper);color:var(--ink)}
+.bg-ink{background:#2b2b31;color:var(--paper)}
+.btn-ui{font-family:"Barlow Condensed","Arial Narrow",sans-serif;font-weight:800;text-transform:uppercase;letter-spacing:.025em}
+.btn-sm{padding:2px 10px;font-size:13px}
+.btn-md{padding:6px 16px;font-size:16px}
+.num{font-variant-numeric:tabular-nums}
+.truncate{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* ---- page layout ---- */
+.app{height:100%;display:flex;flex-direction:column}
+.top{display:flex;flex-wrap:wrap;align-items:center;column-gap:28px;row-gap:12px;padding:20px 20px 12px}
+.logo{position:relative;user-select:none;flex-shrink:0;padding:0 8px 12px 0}
+.logo h1{margin:0;font-family:Bungee,Impact,sans-serif;font-style:italic;font-weight:400;font-size:46px;line-height:1;color:var(--hot);
+  -webkit-text-stroke:2.5px #000;paint-order:stroke fill;text-shadow:4px 4px 0 #000;transform:rotate(-3deg)}
+.logo-sticker{position:absolute;right:-12px;bottom:-2px}
+.transport{display:flex;align-items:center;gap:10px}
+.counter{display:flex;align-items:flex-end;gap:12px}
+.counter-num{font-family:Bungee,Impact,sans-serif;font-style:italic;line-height:1;color:var(--paper);font-size:54px;
+  -webkit-text-stroke:2.5px #000;paint-order:stroke fill;text-shadow:4px 4px 0 var(--hot);font-variant-numeric:tabular-nums}
+.counter-chip{font-weight:800;font-size:14px;padding:2px 8px;background:#000;color:var(--lime);border:2px solid #000}
+.top-right{margin-left:auto;display:flex;flex-wrap:wrap;align-items:center;gap:10px}
+.board{flex:1;min-height:0;display:flex;gap:20px;padding:0 20px 20px}
+.stage{flex:1;min-width:0;min-height:0;display:flex;flex-direction:column}
+.stage-area{flex:1;min-height:0;position:relative}
+.stage-fit{position:absolute;inset:0;display:flex;align-items:center;justify-content:center}
+.chips-row{display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-end;gap:8px;padding-top:12px}
+.chip-dark{font-weight:700;text-transform:uppercase;font-size:12px;padding:4px 8px;background:rgba(0,0,0,.8);color:var(--paper);border:2px solid #000}
+.inspector{width:372px;flex-shrink:0;min-height:0;overflow-y:auto;padding:0 4px 8px 0}
+.inspector-card{position:relative;padding:16px;margin-top:12px;transform:rotate(.4deg)}
+.tabs{display:flex;gap:8px;margin-bottom:16px}
+.tab{flex:1;font-weight:800;text-transform:uppercase;letter-spacing:.025em;font-size:16px;padding:6px 0;color:var(--ink)}
+.banner{margin:0 20px 12px;padding:8px 12px;font-weight:700;background:var(--gold);color:var(--ink);border:3px solid #000;box-shadow:3px 3px 0 #000}
+.error-line{font-weight:700;color:var(--blood);margin:4px 0 0}
+@media (max-width:1023.98px){
+  .board{flex-direction:column;overflow-y:auto}
+  .stage{min-height:520px}
+  .inspector{width:100%}
+}
+
+/* ---- canvas ---- */
+.frame{position:relative;border:3px solid #000;box-shadow:8px 8px 0 #000;overflow:hidden}
+.frame canvas.preview{position:absolute;inset:0;width:100%;height:100%;display:block}
+.cell{position:absolute;overflow:hidden}
+.tile{position:relative;overflow:hidden;cursor:pointer;user-select:none;width:100%;height:100%;border-radius:inherit}
+
+/* ---- inspector parts ---- */
+.label{font-weight:700;text-transform:uppercase;letter-spacing:.12em;font-size:12px;color:#5a564b;margin-bottom:6px}
+.msg{font-size:15px;line-height:1.375;color:#2b2a26;margin:0}
+.select{width:100%;font-family:inherit;font-weight:700;font-size:16px;background:#fff;color:var(--ink);border:3px solid #000;padding:6px 8px;box-shadow:3px 3px 0 #000}
+.box{border:3px solid #000;background:#e7e2d3;padding:12px;box-shadow:3px 3px 0 #000}
+.stack{display:flex;flex-direction:column}
+.row{display:flex;align-items:center}
+.link{font-family:inherit;font-weight:700;text-transform:uppercase;font-size:13px;text-decoration:underline;background:none;border:0;padding:0;cursor:pointer;color:var(--ink)}
+.link:disabled{opacity:.4;cursor:not-allowed}
+.small-note{font-size:13px;color:#5a564b}
+.path{font-size:13px;color:#2b2a26;word-break:break-all;margin:0}
+.choice{border:3px solid #000;cursor:pointer;color:var(--ink);font-family:inherit}
+.choice[aria-pressed="false"]{background:#fff}
+.choice[aria-pressed="false"]:hover{background:#fff3c4}
+.ask{border:3px solid #000;background:#fff3c4;padding:10px;box-shadow:3px 3px 0 #000}
+.ask p{margin:0 0 8px;font-size:15px;line-height:1.3;color:var(--ink)}
+.take-row{border-bottom:2px solid rgba(0,0,0,.15);padding:6px 0}
+.dev-picker{position:fixed;left:8px;bottom:8px;z-index:60;font:12px system-ui;background:#000;color:#fff;border:1px solid #444;padding:2px}

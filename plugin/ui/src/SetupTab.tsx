@@ -1,0 +1,87 @@
+// The inspector's Setup tab: what the plugin needs that the Overdub Cam design has no place for.
+import { api, EngineStatus, params, Status } from "./bridge";
+import { useParam } from "./hooks";
+import { Btn, Label } from "./kit";
+import { FOLLOWS_POSITION, SlotView } from "./model";
+import { AskFirst, ResetSlot } from "./Recover";
+import { SyncChip } from "./SlotTab";
+
+function diskSize(bytes: number) {
+  if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(1)} GB`;
+  if (bytes >= 1e6) return `${Math.round(bytes / 1e6)} MB`;
+  return `${Math.max(1, Math.round(bytes / 1e3))} KB`;
+}
+
+function MasterToggle() {
+  const on = useParam(params.master);
+  return (
+    <Btn color={on ? "hot" : "bone"} pressed={on} onClick={() => params.master.set(!on)}
+      title="Master: arrange the grid and see every slot. A master has no slot of its own.">
+      {on ? "Master view" : "Master"}
+    </Btn>
+  );
+}
+
+export function SetupTab({ engine, status, views, say }: { engine: EngineStatus; status: Status; views: SlotView[]; say: (t: string) => void }) {
+  return (
+    <div className="stack" style={{ gap: 20 }}>
+      <div>
+        <Label>This Griddy</Label>
+        <div className="row" style={{ gap: 10, flexWrap: "wrap" }}>
+          <MasterToggle />
+          <span className="small-note">{engine.instances} {engine.instances === 1 ? "track" : "tracks"} in this set</span>
+        </div>
+      </div>
+
+      <div>
+        <Label>Session</Label>
+        <p className="path" title={engine.sessionFolder}>{engine.session}</p>
+        <p className="small-note" style={{ margin: "4px 0 8px" }}>Takes for this set are saved in this folder. Saving your set keeps it; a new set or a template starts its own.</p>
+        {(engine.takesBytes ?? -1) >= 0 && <p className="small-note" style={{ margin: "0 0 8px" }}>Takes in this session use {diskSize(engine.takesBytes ?? 0)}.</p>}
+        <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+          <Btn small onClick={() => api.revealSessionFolder()}>Show folder</Btn>
+          <AskFirst
+            label="New session"
+            small
+            disabled={engine.recording}
+            question="Start an empty session for this set? Every slot goes back to its live camera. Nothing is deleted: the current session folder stays in Sessions with all its takes."
+            confirmLabel="Start new session"
+            onConfirm={async () => {
+              const ok = await api.newSession();
+              if (ok) say("New session started");
+              return ok;
+            }}
+          />
+        </div>
+      </div>
+
+      <div>
+        <Label>Takes folder</Label>
+        <p className="path" title={status.outputFolder}>{status.outputFolder || "…"}</p>
+        {!!engine.pendingFolder && <p className="path">Moves to {engine.pendingFolder} when this take ends.</p>}
+        <p className="small-note" style={{ margin: "4px 0 8px" }}>Every finished take is also saved as a plain .mov in the Takes folder inside it.</p>
+        <div className="row" style={{ gap: 8 }}>
+          <Btn small onClick={() => api.chooseOutputFolder()}>Choose…</Btn>
+          <Btn small onClick={() => api.revealOutputFolder()}>Show takes</Btn>
+        </div>
+      </div>
+
+      {engine.master && (
+        <div>
+          <Label>Every slot</Label>
+          <ul className="stack" style={{ listStyle: "none", margin: 0, padding: 0, gap: 8 }}>
+            {views.map((v) => (
+              <li key={v.slot} className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+                <span className="f-sign" style={{ fontSize: 11, lineHeight: 1, padding: "3px 4px", border: "2px solid #000", background: v.color }}>{v.slot + 1}</span>
+                <span className="truncate" style={{ fontWeight: 700, textTransform: "uppercase", fontSize: 13, maxWidth: 110 }}>{v.claimed ? v.name : "No track"}</span>
+                <SyncChip slot={v.info} />
+                <span style={{ marginLeft: "auto" }}><ResetSlot slot={v.slot} onDone={() => say(`Slot ${v.slot + 1} reset`)} /></span>
+                {!v.follows && v.takes.length > 0 && <p className="small-note" style={{ margin: 0, flexBasis: "100%" }}>{FOLLOWS_POSITION}</p>}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}

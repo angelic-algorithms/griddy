@@ -1,0 +1,676 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Griddy Overdub Cam</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bungee&family=Permanent+Marker&family=Barlow+Condensed:wght@500;600;700;800&display=swap">
+<script src="https://cdn.tailwindcss.com/3.4.17"></script>
+<script>tailwind.config = {"theme":{"extend":{"colors":{"asphalt":"#141416","paper":"#f3efe4","ink":"#0b0b0d","hot":"#ff6a1a","lime":"#b8ff1f","pink":"#ff3fae","sky":"#35c6ff","gold":"#ffd400","blood":"#ff2e3e"},"fontFamily":{"sign":["Bungee","Impact","sans-serif"],"tag":["\"Permanent Marker\"","\"Marker Felt\"","cursive"],"ui":["\"Barlow Condensed\"","\"Arial Narrow\"","sans-serif"]}}}};</script>
+<style>
+:root{--asphalt:#141416;--paper:#f3efe4;--ink:#0b0b0d;--hot:#ff6a1a;--lime:#b8ff1f;--pink:#ff3fae;--sky:#35c6ff;--gold:#ffd400;--blood:#ff2e3e}
+/* layout idea: a street poster pinned to a chain link fence, canvas left, taped inspector right, timeline under the canvas */
+html,body,#root{height:100%;margin:0}
+body{background-color:var(--asphalt);color:var(--paper);font-family:"Barlow Condensed","Arial Narrow",sans-serif;
+  background-image:
+   url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='240' height='240'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.8' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 .08 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>"),
+   repeating-linear-gradient(45deg,transparent 0 22px,rgba(255,255,255,.03) 22px 24px),
+   repeating-linear-gradient(-45deg,transparent 0 22px,rgba(255,255,255,.03) 22px 24px);
+  background-attachment:fixed}
+button{font-family:inherit}
+.paper{background:var(--paper);color:var(--ink);border:3px solid #000;box-shadow:6px 6px 0 #000}
+.tape::before{content:"";position:absolute;top:-11px;left:50%;width:74px;height:20px;transform:translateX(-50%) rotate(-3deg);background:rgba(255,226,120,.82);box-shadow:0 1px 0 rgba(0,0,0,.25);z-index:2}
+.tape-piece{background:rgba(255,226,120,.85);box-shadow:0 1px 0 rgba(0,0,0,.3);z-index:3}
+.btn{transform:skewX(-8deg);border:3px solid #000;box-shadow:3px 3px 0 #000;cursor:pointer;transition:transform .08s,box-shadow .08s,filter .08s;line-height:1.1}
+.btn>span{display:inline-block;transform:skewX(8deg)}
+.btn:hover:not(:disabled){filter:brightness(1.08)}
+.btn:active:not(:disabled){transform:skewX(-8deg) translate(2px,2px);box-shadow:1px 1px 0 #000}
+.btn:focus-visible,.nudge:focus-visible,.tile:focus-visible{outline:3px solid #fff;outline-offset:2px}
+.btn:disabled{opacity:.4;cursor:not-allowed}
+.nudge{color:var(--sky);font-size:13px;padding:2px 6px;cursor:pointer;background:transparent;border:0}
+.nudge:hover{color:#fff}
+.hatch{background:repeating-linear-gradient(45deg,#17171b 0 10px,#202027 10px 20px)}
+.scan{background:repeating-linear-gradient(0deg,rgba(0,0,0,.16) 0 1px,transparent 1px 3px);mix-blend-mode:multiply}
+.vf{opacity:.85;background:
+ linear-gradient(#fff,#fff) 0 0/22px 3px no-repeat,linear-gradient(#fff,#fff) 0 0/3px 22px no-repeat,
+ linear-gradient(#fff,#fff) 100% 0/22px 3px no-repeat,linear-gradient(#fff,#fff) 100% 0/3px 22px no-repeat,
+ linear-gradient(#fff,#fff) 0 100%/22px 3px no-repeat,linear-gradient(#fff,#fff) 0 100%/3px 22px no-repeat,
+ linear-gradient(#fff,#fff) 100% 100%/22px 3px no-repeat,linear-gradient(#fff,#fff) 100% 100%/3px 22px no-repeat}
+.stripes-rec{background:repeating-linear-gradient(45deg,#ff2e3e 0 8px,#8f1522 8px 16px)}
+.ring-armed{animation:armed 1.6s ease-in-out infinite}
+.ring-rec{animation:armed .8s ease-in-out infinite}
+@keyframes armed{50%{box-shadow:inset 0 0 0 3px rgba(255,255,255,.35),0 0 18px rgba(255,255,255,.25)}}
+.blink{animation:blink 1s steps(2,jump-none) infinite}
+@keyframes blink{50%{opacity:.55}}
+.rec-pulse{animation:recp 1s ease-in-out infinite}
+@keyframes recp{50%{box-shadow:3px 3px 0 #000,0 0 0 5px rgba(255,46,62,.45)}}
+.count{animation:pop .5s ease-out}
+@keyframes pop{0%{transform:scale(1.5);opacity:0}60%{opacity:1}100%{transform:scale(1)}}
+.toast{animation:rise .2s ease-out}
+@keyframes rise{from{transform:translate(-50%,10px);opacity:0}to{transform:translate(-50%,0);opacity:1}}
+select,input{border-radius:0}
+@media (prefers-reduced-motion:reduce){.ring-armed,.ring-rec,.blink,.rec-pulse,.count,.toast{animation:none}}
+
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
+<script>
+(() => {
+  const { useState, useEffect, useRef, useMemo } = React;
+  const BPM = 120;
+  const BPS = BPM / 60;
+  const BEATS_PER_BAR = 4;
+  const LOOP_END = 16;
+  const PROJECT_END = 32;
+  const FPS = 30;
+  const FRAME_MS = 1e3 / FPS;
+  const C = {
+    hot: "#ff6a1a",
+    lime: "#b8ff1f",
+    pink: "#ff3fae",
+    sky: "#35c6ff",
+    gold: "#ffd400",
+    blood: "#ff2e3e",
+    violet: "#a66bff",
+    mint: "#19e6b4",
+    bone: "#f3efe4"
+  };
+  const SLOT_COLORS = [C.hot, C.sky, C.pink, C.lime, C.gold, C.blood, C.violet, C.mint, C.bone];
+  const SKIN = ["#c68a5e", "#8d5a3b", "#e0ac82", "#5f3a25", "#f0c8a0", "#a46f48", "#d79c70", "#744a30", "#bd8156"];
+  const TRACKS = [
+    { id: "d1", name: "Lead Vox", kind: "DAW" },
+    { id: "d2", name: "Harmony High", kind: "DAW" },
+    { id: "d3", name: "Harmony Low", kind: "DAW" },
+    { id: "d4", name: "Bass Vox", kind: "DAW" },
+    { id: "d5", name: "Beatbox", kind: "DAW" },
+    { id: "d6", name: "Guitar DI", kind: "DAW" },
+    { id: "d7", name: "Keys", kind: "DAW" },
+    { id: "d8", name: "Ad Libs", kind: "DAW" },
+    { id: "d9", name: "Bridge Stack", kind: "DAW" },
+    { id: "i1", name: "Internal A", kind: "INT" },
+    { id: "i2", name: "Internal B", kind: "INT" },
+    { id: "i3", name: "Internal C", kind: "INT" }
+  ];
+  const trackName = (id) => (TRACKS.find((t) => t.id === id) || { name: "No track" }).name;
+  const grid = (c, r) => {
+    const cells = [];
+    for (let y = 1; y <= r; y++) for (let x = 1; x <= c; x++) cells.push([x, y, 1, 1]);
+    return cells;
+  };
+  const TEMPLATES = [
+    { id: "1x1", label: "1\xD71", cols: 1, rows: 1, cells: grid(1, 1) },
+    { id: "1x2", label: "1\xD72", cols: 2, rows: 1, cells: grid(2, 1) },
+    { id: "2x1", label: "2\xD71", cols: 1, rows: 2, cells: grid(1, 2) },
+    { id: "1p2", label: "1+2", cols: 3, rows: 2, cells: [[1, 1, 2, 2], [3, 1, 1, 1], [3, 2, 1, 1]] },
+    { id: "3s", label: "Stack 3", cols: 1, rows: 3, cells: grid(1, 3) },
+    { id: "2x2", label: "2\xD72", cols: 2, rows: 2, cells: grid(2, 2) },
+    { id: "1p3", label: "1+3", cols: 3, rows: 3, cells: [[1, 1, 3, 2], [1, 3, 1, 1], [2, 3, 1, 1], [3, 3, 1, 1]] },
+    { id: "2p3", label: "2+3", cols: 6, rows: 2, cells: [[1, 1, 3, 1], [4, 1, 3, 1], [1, 2, 2, 1], [3, 2, 2, 1], [5, 2, 2, 1]] },
+    { id: "1p5", label: "1+5", cols: 3, rows: 3, cells: [[1, 1, 2, 2], [3, 1, 1, 1], [3, 2, 1, 1], [1, 3, 1, 1], [2, 3, 1, 1], [3, 3, 1, 1]] },
+    { id: "3x2", label: "3\xD72", cols: 3, rows: 2, cells: grid(3, 2) },
+    { id: "3p4", label: "3+4", cols: 12, rows: 2, cells: [[1, 1, 4, 1], [5, 1, 4, 1], [9, 1, 4, 1], [1, 2, 3, 1], [4, 2, 3, 1], [7, 2, 3, 1], [10, 2, 3, 1]] },
+    { id: "4x2", label: "4\xD72", cols: 4, rows: 2, cells: grid(4, 2) },
+    { id: "3x3", label: "3\xD73", cols: 3, rows: 3, cells: grid(3, 3) }
+  ];
+  const ASPECTS = [
+    { id: "9:16", w: 9, h: 16, note: "Reels and TikTok", out: "1080\xD71920" },
+    { id: "1:1", w: 1, h: 1, note: "Square", out: "1080\xD71080" },
+    { id: "16:9", w: 16, h: 9, note: "Widescreen", out: "1920\xD71080" }
+  ];
+  const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+  const fmtMs = (ms) => {
+    const r = Math.round(ms);
+    return (r > 0 ? "+" : r < 0 ? "\u2212" : "") + Math.abs(r) + " ms";
+  };
+  const fmtFrames = (ms) => {
+    const f = ms / FRAME_MS;
+    return (f > 0.05 ? "+" : f < -0.05 ? "\u2212" : "") + Math.abs(f).toFixed(1) + " f";
+  };
+  const barBeat = (beat) => `${Math.floor(beat / BEATS_PER_BAR) + 1}.${Math.floor(beat % BEATS_PER_BAR) + 1}`;
+  const fmtDb = (v) => v <= -60 ? "\u2212\u221E dB" : (v > 0 ? "+" : v < 0 ? "\u2212" : "") + Math.abs(v).toFixed(1) + " dB";
+  const makeTake = (len, offsetMs, seed) => ({ start: 0, len, offsetMs, seed });
+  const initSlots = () => SLOT_COLORS.map((color, i) => ({
+    id: i,
+    color,
+    trackId: TRACKS[i].id,
+    status: "empty",
+    take: null,
+    prev: null,
+    mix: { gain: 0, pan: 0, mute: false, solo: false, hpf: 20 }
+  }));
+  const startSlots = () => {
+    const s = initSlots();
+    s[0] = { ...s[0], status: "approved", take: makeTake(16, 0, 11), mix: { ...s[0].mix, gain: -1.5 } };
+    s[1] = { ...s[1], status: "approved", take: makeTake(16, 24, 29), mix: { ...s[1].mix, pan: -35, gain: -4 } };
+    s[2] = { ...s[2], status: "review", take: makeTake(16, 0, 47), mix: { ...s[2].mix, pan: 35, gain: -4 } };
+    return s;
+  };
+  const BTN_BG = {
+    hot: "bg-hot text-ink",
+    lime: "bg-lime text-ink",
+    pink: "bg-pink text-ink",
+    sky: "bg-sky text-ink",
+    gold: "bg-gold text-ink",
+    blood: "bg-blood text-white",
+    bone: "bg-paper text-ink",
+    ink: "bg-[#2b2b31] text-paper"
+  };
+  function Btn({ color = "bone", onClick, children, disabled, className = "", title, small, pressed, label }) {
+    return /* @__PURE__ */ React.createElement(
+      "button",
+      {
+        type: "button",
+        onClick,
+        disabled,
+        title,
+        "aria-pressed": pressed,
+        "aria-label": label,
+        className: `btn ${BTN_BG[color]} ${small ? "px-2.5 py-0.5 text-[13px]" : "px-4 py-1.5 text-[16px]"} font-ui font-extrabold uppercase tracking-wide ${className}`
+      },
+      /* @__PURE__ */ React.createElement("span", null, children)
+    );
+  }
+  function Sticker({ children, color = C.gold, className = "", rotate = -2, text = "#0b0b0d" }) {
+    return /* @__PURE__ */ React.createElement(
+      "span",
+      {
+        className: `inline-block font-tag leading-none px-2 py-1 border-[2.5px] border-black ${className}`,
+        style: { background: color, color: text, transform: `rotate(${rotate}deg)`, boxShadow: "2px 2px 0 #000" }
+      },
+      children
+    );
+  }
+  function Label({ children }) {
+    return /* @__PURE__ */ React.createElement("div", { className: "font-ui font-bold uppercase tracking-[.12em] text-[12px] text-[#5a564b] mb-1.5" }, children);
+  }
+  function Slider({ id, value, min, max, step = 1, onChange, label, readout, color }) {
+    return /* @__PURE__ */ React.createElement("div", { className: "flex flex-col gap-1" }, /* @__PURE__ */ React.createElement("div", { className: "flex items-baseline justify-between" }, /* @__PURE__ */ React.createElement("label", { htmlFor: id, className: "font-ui font-bold uppercase tracking-[.08em] text-[13px]" }, label), /* @__PURE__ */ React.createElement("span", { className: "font-ui font-extrabold text-[14px] tabular-nums" }, readout)), /* @__PURE__ */ React.createElement(
+      "input",
+      {
+        id,
+        type: "range",
+        min,
+        max,
+        step,
+        value,
+        onChange: (e) => onChange(Number(e.target.value)),
+        style: { accentColor: color || C.hot },
+        className: "w-full h-5 cursor-pointer"
+      }
+    ));
+  }
+  function TplThumb({ tpl, on }) {
+    return /* @__PURE__ */ React.createElement(
+      "div",
+      {
+        className: "grid gap-[2px] w-full aspect-[4/3] p-[3px] bg-black",
+        style: { gridTemplateColumns: `repeat(${tpl.cols},1fr)`, gridTemplateRows: `repeat(${tpl.rows},1fr)` }
+      },
+      tpl.cells.map((c, i) => /* @__PURE__ */ React.createElement("div", { key: i, style: { gridColumn: `${c[0]} / span ${c[2]}`, gridRow: `${c[1]} / span ${c[3]}`, background: on ? C.lime : "#76757f" } }))
+    );
+  }
+  function Performer({ color, variant, beat, live }) {
+    const bob = Math.sin(beat * Math.PI) * 2.4;
+    const sway = Math.sin(beat * Math.PI / 2) * 3;
+    const mouth = 0.8 + Math.abs(Math.sin(beat * Math.PI * 2 + variant)) * 3.2;
+    const skin = SKIN[variant % SKIN.length];
+    const v = variant % 5;
+    const id = `p${variant}${live ? "l" : "t"}`;
+    return /* @__PURE__ */ React.createElement("svg", { viewBox: "0 0 160 120", preserveAspectRatio: "xMidYMid slice", className: "absolute inset-0 w-full h-full", "aria-hidden": "true" }, /* @__PURE__ */ React.createElement("defs", null, /* @__PURE__ */ React.createElement("radialGradient", { id: `bg${id}`, cx: "50%", cy: "32%", r: "85%" }, /* @__PURE__ */ React.createElement("stop", { offset: "0", stopColor: color, stopOpacity: ".95" }), /* @__PURE__ */ React.createElement("stop", { offset: "1", stopColor: "#0b0b0d" })), /* @__PURE__ */ React.createElement("pattern", { id: `dt${id}`, width: "5", height: "5", patternUnits: "userSpaceOnUse" }, /* @__PURE__ */ React.createElement("circle", { cx: "2.5", cy: "2.5", r: ".9", fill: "#000", opacity: ".3" }))), /* @__PURE__ */ React.createElement("rect", { width: "160", height: "120", fill: `url(#bg${id})` }), /* @__PURE__ */ React.createElement("rect", { width: "160", height: "120", fill: `url(#dt${id})` }), /* @__PURE__ */ React.createElement("g", { transform: `translate(${sway} ${bob})` }, /* @__PURE__ */ React.createElement("path", { d: "M22 130 C24 94 52 86 80 86 C108 86 136 94 138 130Z", fill: "#111114" }), /* @__PURE__ */ React.createElement("path", { d: "M62 88 L80 106 L98 88 L92 86 L80 98 L68 86Z", fill: color, opacity: ".9" }), /* @__PURE__ */ React.createElement("rect", { x: "71", y: "70", width: "18", height: "18", rx: "6", fill: skin }), /* @__PURE__ */ React.createElement("circle", { cx: "80", cy: "56", r: "22", fill: skin }), v === 0 && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("path", { d: "M57 50 C58 30 102 30 103 50 Z", fill: "#111114" }), /* @__PURE__ */ React.createElement("rect", { x: "52", y: "48", width: "56", height: "6", rx: "3", fill: "#111114" })), v === 1 && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("circle", { cx: "80", cy: "42", r: "27", fill: "#111114" }), /* @__PURE__ */ React.createElement("circle", { cx: "80", cy: "56", r: "21", fill: skin })), v === 2 && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("path", { d: "M58 52 C56 26 104 26 102 52", fill: "none", stroke: "#111114", strokeWidth: "5" }), /* @__PURE__ */ React.createElement("rect", { x: "52", y: "48", width: "9", height: "16", rx: "4", fill: color, stroke: "#111114", strokeWidth: "2" }), /* @__PURE__ */ React.createElement("rect", { x: "99", y: "48", width: "9", height: "16", rx: "4", fill: color, stroke: "#111114", strokeWidth: "2" })), v === 3 && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("path", { d: "M58 50 C58 28 102 28 102 50Z", fill: color, stroke: "#111114", strokeWidth: "2.5" }), /* @__PURE__ */ React.createElement("rect", { x: "56", y: "47", width: "48", height: "6", rx: "3", fill: "#111114" })), v === 4 && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("circle", { cx: "80", cy: "32", r: "9", fill: "#111114" }), /* @__PURE__ */ React.createElement("path", { d: "M58 50 C58 34 102 34 102 50 C92 42 68 42 58 50Z", fill: "#111114" })), /* @__PURE__ */ React.createElement("rect", { x: "66", y: "50", width: "28", height: "7", rx: "3", fill: v === 4 ? "none" : "#0b0b0d", opacity: v === 1 || v === 2 ? 0 : 0.9 }), /* @__PURE__ */ React.createElement("ellipse", { cx: "80", cy: "67", rx: "5.5", ry: mouth, fill: "#2a0f12" })));
+  }
+  function Wave({ seed, progress, color, n = 44 }) {
+    const bars = useMemo(() => {
+      let s = seed * 9301 + 49297;
+      return Array.from({ length: n }, (_, i) => {
+        s = (s * 9301 + 49297) % 233280;
+        const r = s / 233280;
+        const env = 0.35 + 0.65 * Math.abs(Math.sin(i / n * Math.PI * 3 + seed));
+        return Math.max(0.14, r * env);
+      });
+    }, [seed, n]);
+    return /* @__PURE__ */ React.createElement("div", { className: "flex items-end gap-[2px] h-full w-full" }, bars.map((h, i) => /* @__PURE__ */ React.createElement("span", { key: i, className: "flex-1 rounded-[1px]", style: { height: `${h * 100}%`, background: i / n <= progress ? color : "rgba(255,255,255,.3)" } })));
+  }
+  function Tile({ slot, idx, isActive, tr, dens, onSelect, onKeep, onRetake, onNudge, anySolo }) {
+    const { status, take, color, mix } = slot;
+    const compact = dens !== "full";
+    const tiny = dens === "tiny";
+    const recording = isActive && tr.mode === "recording";
+    const counting = isActive && tr.mode === "countin";
+    const showLive = isActive && status !== "review";
+    const showTake = !!take && !showLive;
+    const prevMuted = isActive && status === "approved";
+    const offBeats = take ? take.offsetMs / 1e3 * BPS : 0;
+    const progress = take ? clamp((tr.beat - offBeats) / take.len, 0, 1) : 0;
+    const audible = !mix.mute && (!anySolo || mix.solo);
+    let badge = { t: "EMPTY", bg: "#3a3a42", fg: "#d8d6cc" };
+    if (recording) badge = { t: "\u25CF REC", bg: C.blood, fg: "#fff" };
+    else if (counting) badge = { t: "GET READY", bg: C.gold, fg: "#0b0b0d" };
+    else if (status === "review") badge = { t: "REVIEW", bg: C.gold, fg: "#0b0b0d" };
+    else if (showLive) badge = { t: "ARMED \xB7 LIVE", bg: C.hot, fg: "#0b0b0d" };
+    else if (status === "approved") badge = { t: "\u2713 APPROVED", bg: C.lime, fg: "#0b0b0d" };
+    if (compact) badge = { ...badge, t: { "GET READY": "READY", "ARMED \xB7 LIVE": "LIVE", "\u2713 APPROVED": "\u2713" }[badge.t] || badge.t };
+    return /* @__PURE__ */ React.createElement(
+      "div",
+      {
+        role: "button",
+        tabIndex: 0,
+        "aria-label": `Slot ${idx + 1}, ${trackName(slot.trackId)}, ${badge.t}`,
+        onClick: onSelect,
+        onKeyDown: (e) => {
+          if ((e.key === "Enter" || e.key === " ") && e.target === e.currentTarget) {
+            e.preventDefault();
+            onSelect();
+          }
+        },
+        className: "tile relative overflow-hidden cursor-pointer select-none w-full h-full",
+        style: { borderRadius: "inherit", background: "#0b0b0d" }
+      },
+      showTake && /* @__PURE__ */ React.createElement(Performer, { color, variant: slot.id, beat: tr.beat - offBeats, live: false }),
+      showLive && /* @__PURE__ */ React.createElement(Performer, { color: C.sky, variant: slot.id + 3, beat: tr.beat, live: true }),
+      !showTake && !showLive && /* @__PURE__ */ React.createElement("div", { className: "absolute inset-0 flex flex-col items-center justify-center gap-2 hatch" }, /* @__PURE__ */ React.createElement("div", { className: "font-sign leading-none", style: { fontSize: tiny ? 30 : compact ? 48 : 84, color, WebkitTextStroke: "3px #000", paintOrder: "stroke fill", textShadow: "4px 4px 0 #000" } }, tiny ? "+" : idx + 1), !tiny && /* @__PURE__ */ React.createElement(Sticker, { color: C.gold, rotate: -3, className: "text-[13px]" }, "TAP TO CLAIM")),
+      (showTake || showLive) && /* @__PURE__ */ React.createElement("div", { className: "absolute inset-0 scan pointer-events-none" }),
+      showLive && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { className: "absolute inset-3 pointer-events-none vf" }), !compact && !recording && !counting && /* @__PURE__ */ React.createElement("div", { className: "absolute left-1/2 bottom-3 -translate-x-1/2 pointer-events-none" }, /* @__PURE__ */ React.createElement(Sticker, { color: "#fff", rotate: 0, className: "text-[11px]" }, "LOW LATENCY PREVIEW"))),
+      isActive && /* @__PURE__ */ React.createElement(
+        "div",
+        {
+          className: `absolute inset-0 pointer-events-none ${recording ? "ring-rec" : "ring-armed"}`,
+          style: { borderRadius: "inherit", border: `5px solid ${recording ? C.blood : C.lime}` }
+        }
+      ),
+      /* @__PURE__ */ React.createElement("div", { className: "absolute left-2 top-2 flex items-start gap-1.5 max-w-[calc(100%-1rem)] pointer-events-none" }, /* @__PURE__ */ React.createElement("span", { className: "font-sign text-[13px] leading-none px-1.5 py-1 border-[2.5px] border-black", style: { background: color, color: "#0b0b0d", boxShadow: "2px 2px 0 #000", transform: "rotate(-3deg)" } }, idx + 1), !compact && /* @__PURE__ */ React.createElement("span", { className: "font-ui font-extrabold uppercase tracking-wide text-[13px] leading-none px-1.5 py-1 bg-black/80 text-paper truncate" }, trackName(slot.trackId))),
+      /* @__PURE__ */ React.createElement("div", { className: `absolute right-2 top-2 flex flex-col items-end gap-1 pointer-events-none ${tiny && status === "empty" && !isActive ? "hidden" : ""}` }, /* @__PURE__ */ React.createElement("span", { className: `font-ui font-extrabold uppercase tracking-wide ${tiny ? "text-[10px] px-1" : "text-[12px] px-2"} leading-none py-1 border-2 border-black ${recording ? "blink" : ""}`, style: { background: badge.bg, color: badge.fg, boxShadow: "2px 2px 0 #000" } }, badge.t), prevMuted && !compact && /* @__PURE__ */ React.createElement("span", { className: "font-ui font-bold uppercase text-[11px] leading-none px-1.5 py-1 bg-black/85 text-gold" }, "Previous take muted"), !audible && showTake && !tiny && /* @__PURE__ */ React.createElement("span", { className: "font-ui font-bold uppercase text-[11px] leading-none px-1.5 py-1 bg-black/85 text-paper" }, mix.mute ? "Muted" : "Not soloed"), take && take.offsetMs !== 0 && !showLive && !tiny && /* @__PURE__ */ React.createElement("span", { className: "font-ui font-bold uppercase text-[11px] leading-none px-1.5 py-1 bg-black/85 text-sky" }, "Slip ", fmtMs(take.offsetMs))),
+      counting && /* @__PURE__ */ React.createElement("div", { className: "absolute inset-0 flex items-center justify-center pointer-events-none bg-black/35" }, /* @__PURE__ */ React.createElement("div", { key: Math.ceil(tr.count), className: "count font-sign text-paper leading-none", style: { fontSize: tiny ? 44 : compact ? 72 : 140, WebkitTextStroke: "4px #000", paintOrder: "stroke fill", textShadow: "6px 6px 0 " + C.hot } }, Math.max(1, Math.ceil(tr.count)))),
+      /* @__PURE__ */ React.createElement("div", { className: `absolute inset-x-0 bottom-0 ${tiny ? "p-1" : "p-2"} flex flex-col gap-1.5`, style: { background: "linear-gradient(0deg, rgba(0,0,0,.82), rgba(0,0,0,0))" } }, take && showTake && /* @__PURE__ */ React.createElement("div", { className: `${tiny ? "h-4" : "h-7"} pointer-events-none` }, /* @__PURE__ */ React.createElement(Wave, { seed: take.seed, progress, color, n: tiny ? 14 : compact ? 28 : 52 })), recording && /* @__PURE__ */ React.createElement("div", { className: "h-1.5 bg-white/20 pointer-events-none" }, /* @__PURE__ */ React.createElement("div", { className: "h-full bg-blood", style: { width: `${clamp(tr.beat / LOOP_END, 0, 1) * 100}%` } })), status === "review" && !recording && /* @__PURE__ */ React.createElement("div", { className: "flex flex-wrap items-center gap-2", onClick: (e) => e.stopPropagation() }, /* @__PURE__ */ React.createElement(Btn, { color: "lime", small: compact, onClick: onKeep, title: "Keep this take (K)", label: "Keep this take" }, tiny ? "\u2713" : "\u2713 Keep"), /* @__PURE__ */ React.createElement(Btn, { color: "blood", small: compact, onClick: onRetake, title: "Discard this take and record again", label: "Retake" }, tiny ? "\u21BA" : "\u21BA Retake"), !compact && /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-1 ml-auto bg-black/80 border-2 border-black px-1.5 py-0.5", role: "group", "aria-label": "Slip offset" }, /* @__PURE__ */ React.createElement("button", { type: "button", className: "nudge", onClick: () => onNudge(-FRAME_MS), "aria-label": "Slip earlier by one frame" }, "\u25C0"), /* @__PURE__ */ React.createElement("span", { className: "font-ui font-extrabold text-[13px] text-sky tabular-nums min-w-[64px] text-center" }, fmtMs(take.offsetMs)), /* @__PURE__ */ React.createElement("button", { type: "button", className: "nudge", onClick: () => onNudge(FRAME_MS), "aria-label": "Slip later by one frame" }, "\u25B6"))))
+    );
+  }
+  function Timeline({ slots, n, tr, active, onActive, onSeek, loopOn }) {
+    const rows = slots.slice(0, n);
+    const pct = (b) => `${b / PROJECT_END * 100}%`;
+    const seek = (e) => {
+      const r = e.currentTarget.getBoundingClientRect();
+      onSeek(clamp((e.clientX - r.left) / r.width * PROJECT_END, 0, PROJECT_END - 0.01));
+    };
+    const recBlock = (i) => tr.mode === "recording" && active === i;
+    return /* @__PURE__ */ React.createElement("div", { className: "paper tape px-3 pt-3 pb-6 mt-2 relative", style: { transform: "rotate(-.2deg)" } }, /* @__PURE__ */ React.createElement("div", { className: "flex" }, /* @__PURE__ */ React.createElement("div", { className: "w-[150px] shrink-0 pr-2 flex items-end pb-1" }, /* @__PURE__ */ React.createElement("span", { className: "font-tag text-[14px]" }, "Takes timeline")), /* @__PURE__ */ React.createElement("div", { className: "flex-1 relative cursor-pointer", onClick: seek, "aria-label": "Timeline ruler, click to move the playhead" }, /* @__PURE__ */ React.createElement("div", { className: "relative h-6 border-b-[3px] border-black" }, Array.from({ length: PROJECT_END / BEATS_PER_BAR }, (_, b) => /* @__PURE__ */ React.createElement("div", { key: b, className: "absolute top-0 bottom-0 border-l-2 border-black/60 pl-1 font-ui font-bold text-[12px]", style: { left: pct(b * BEATS_PER_BAR) } }, b + 1)), loopOn && /* @__PURE__ */ React.createElement("div", { className: "absolute bottom-0 h-[6px] bg-hot border-2 border-black", style: { left: 0, width: pct(LOOP_END) }, title: "Loop bars 1 to 4" })))), /* @__PURE__ */ React.createElement("div", { className: "max-h-[132px] overflow-y-auto" }, rows.map((s, i) => {
+      const t = s.take;
+      const off = t ? t.offsetMs / 1e3 * BPS : 0;
+      return /* @__PURE__ */ React.createElement("div", { key: s.id, className: "flex items-stretch h-[26px] border-b border-black/20" }, /* @__PURE__ */ React.createElement("button", { type: "button", onClick: () => onActive(i), className: "w-[150px] shrink-0 flex items-center gap-1.5 pr-2 text-left", "aria-label": `Select slot ${i + 1}` }, /* @__PURE__ */ React.createElement("span", { className: "font-sign text-[11px] leading-none px-1 py-[3px] border-2 border-black", style: { background: s.color } }, i + 1), /* @__PURE__ */ React.createElement("span", { className: `font-ui font-bold uppercase text-[13px] truncate ${active === i ? "underline decoration-[3px]" : ""}` }, trackName(s.trackId))), /* @__PURE__ */ React.createElement("div", { className: "flex-1 relative cursor-pointer", onClick: seek }, Array.from({ length: PROJECT_END / BEATS_PER_BAR }, (_, b) => /* @__PURE__ */ React.createElement("div", { key: b, className: "absolute top-0 bottom-0 border-l border-black/15", style: { left: pct(b * BEATS_PER_BAR) } })), t && /* @__PURE__ */ React.createElement(
+        "div",
+        {
+          className: "absolute top-[3px] bottom-[3px] border-2 border-black flex items-center px-1.5 overflow-hidden",
+          style: {
+            left: pct(t.start + off),
+            width: pct(t.len),
+            background: s.status === "review" ? "repeating-linear-gradient(45deg," + s.color + " 0 8px, #f3efe4 8px 14px)" : s.color,
+            borderStyle: s.status === "review" ? "dashed" : "solid",
+            opacity: active === i && s.status === "approved" && tr.mode !== "stopped" ? 0.35 : 1
+          },
+          title: `${trackName(s.trackId)}, ${s.status}, slip ${fmtMs(t.offsetMs)}`
+        },
+        /* @__PURE__ */ React.createElement("span", { className: "font-ui font-extrabold uppercase text-[11px] bg-black/80 text-paper px-1 leading-[14px]" }, s.status === "review" ? "Pending" : "Take")
+      ), recBlock(i) && /* @__PURE__ */ React.createElement("div", { className: "absolute top-[3px] bottom-[3px] border-2 border-black stripes-rec", style: { left: 0, width: pct(tr.beat) } })));
+    })), /* @__PURE__ */ React.createElement("div", { className: "absolute top-[34px] bottom-6 pointer-events-none", style: { left: 162, right: 12 } }, /* @__PURE__ */ React.createElement("div", { className: "absolute top-0 bottom-0 w-[3px] bg-blood", style: { left: pct(tr.beat), boxShadow: "0 0 0 1px #000" } }, /* @__PURE__ */ React.createElement("span", { className: "absolute -bottom-[20px] -translate-x-1/2 left-1/2 font-ui font-extrabold text-[11px] bg-blood text-white px-1 border border-black" }, barBeat(tr.beat)))));
+  }
+  function SlotTab({ slot, idx, tr, tracks, onTrack, onKeep, onRetake, onClear, onNudge, onResetSlip }) {
+    const take = slot.take;
+    const used = new Set(tracks);
+    const msg = slot.status === "review" ? "Fresh take. Watch it back, fix the timing, then keep it or go again." : slot.status === "approved" ? "Approved and playing in time. Hit REC to overwrite it. The old take stays muted until you keep the new one." : "Nothing here yet. Hit REC and Griddy counts you in for one bar, then records this slot.";
+    return /* @__PURE__ */ React.createElement("div", { className: "flex flex-col gap-4" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-2 mb-2" }, /* @__PURE__ */ React.createElement("span", { className: "font-sign text-[18px] leading-none px-2 py-1.5 border-[3px] border-black", style: { background: slot.color, boxShadow: "3px 3px 0 #000" } }, idx + 1), /* @__PURE__ */ React.createElement("div", { className: "font-ui font-extrabold uppercase text-[20px] leading-none" }, "Slot ", idx + 1, " is the target")), /* @__PURE__ */ React.createElement("p", { className: "font-ui text-[15px] leading-snug text-[#2b2a26]" }, msg)), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(Label, null, "Assigned track"), /* @__PURE__ */ React.createElement(
+      "select",
+      {
+        id: "slot-track",
+        value: slot.trackId,
+        onChange: (e) => onTrack(e.target.value),
+        className: "w-full font-ui font-bold text-[16px] bg-white border-[3px] border-black px-2 py-1.5 shadow-[3px_3px_0_#000]"
+      },
+      /* @__PURE__ */ React.createElement("optgroup", { label: "DAW audio tracks" }, TRACKS.filter((t) => t.kind === "DAW").map((t) => /* @__PURE__ */ React.createElement("option", { key: t.id, value: t.id }, t.name, used.has(t.id) && t.id !== slot.trackId ? "  (in use, will swap)" : ""))),
+      /* @__PURE__ */ React.createElement("optgroup", { label: "Internal plugin channels" }, TRACKS.filter((t) => t.kind === "INT").map((t) => /* @__PURE__ */ React.createElement("option", { key: t.id, value: t.id }, t.name, used.has(t.id) && t.id !== slot.trackId ? "  (in use, will swap)" : "")))
+    )), slot.status === "review" && /* @__PURE__ */ React.createElement("div", { className: "flex gap-2" }, /* @__PURE__ */ React.createElement(Btn, { color: "lime", onClick: onKeep, className: "flex-1", title: "Keep this take (K)" }, "\u2713 Keep take"), /* @__PURE__ */ React.createElement(Btn, { color: "blood", onClick: onRetake, className: "flex-1" }, "\u21BA Retake")), take && /* @__PURE__ */ React.createElement("div", { className: "border-[3px] border-black bg-[#e7e2d3] p-3 shadow-[3px_3px_0_#000]" }, /* @__PURE__ */ React.createElement("div", { className: "flex items-baseline justify-between mb-2" }, /* @__PURE__ */ React.createElement(Label, null, "Trim and slip"), /* @__PURE__ */ React.createElement("span", { className: "font-ui font-extrabold text-[18px] tabular-nums leading-none" }, fmtMs(take.offsetMs), " ", /* @__PURE__ */ React.createElement("span", { className: "text-[#5a564b] text-[14px]" }, "\xB7 ", fmtFrames(take.offsetMs)))), /* @__PURE__ */ React.createElement("div", { className: "grid grid-cols-4 gap-1.5" }, /* @__PURE__ */ React.createElement(Btn, { small: true, color: "ink", onClick: () => onNudge(-10), label: "Slip earlier by 10 milliseconds" }, "\u221210 ms"), /* @__PURE__ */ React.createElement(Btn, { small: true, color: "sky", onClick: () => onNudge(-FRAME_MS), label: "Slip earlier by one frame" }, "\u22121 f"), /* @__PURE__ */ React.createElement(Btn, { small: true, color: "sky", onClick: () => onNudge(FRAME_MS), label: "Slip later by one frame" }, "+1 f"), /* @__PURE__ */ React.createElement(Btn, { small: true, color: "ink", onClick: () => onNudge(10), label: "Slip later by 10 milliseconds" }, "+10 ms")), /* @__PURE__ */ React.createElement("div", { className: "flex items-center justify-between mt-2" }, /* @__PURE__ */ React.createElement("span", { className: "font-ui text-[13px] text-[#5a564b]" }, "One frame is ", FRAME_MS.toFixed(1), " ms at ", FPS, " fps"), /* @__PURE__ */ React.createElement("button", { type: "button", onClick: onResetSlip, className: "font-ui font-bold uppercase text-[13px] underline" }, "Reset"))), slot.status === "approved" && /* @__PURE__ */ React.createElement(Btn, { color: "bone", small: true, onClick: onClear, className: "self-start" }, "Clear this slot"));
+  }
+  function LookTab({ look, setLook, tpl }) {
+    const [hex, setHex] = useState(look.color);
+    useEffect(() => setHex(look.color), [look.color]);
+    const setColor = (c) => setLook((l) => ({ ...l, color: c }));
+    return /* @__PURE__ */ React.createElement("div", { className: "flex flex-col gap-5" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(Label, null, "Grid template \xB7 ", tpl.cells.length, " ", tpl.cells.length === 1 ? "panel" : "panels"), /* @__PURE__ */ React.createElement("div", { className: "grid grid-cols-4 gap-2" }, TEMPLATES.map((t) => {
+      const on = t.id === look.tpl;
+      return /* @__PURE__ */ React.createElement(
+        "button",
+        {
+          key: t.id,
+          type: "button",
+          onClick: () => setLook((l) => ({ ...l, tpl: t.id })),
+          "aria-pressed": on,
+          "aria-label": `${t.label}, ${t.cells.length} ${t.cells.length === 1 ? "panel" : "panels"}`,
+          className: `border-[3px] border-black p-1 flex flex-col gap-1 items-center ${on ? "bg-lime shadow-[3px_3px_0_#000] -translate-y-[1px]" : "bg-white hover:bg-[#fff3c4]"}`
+        },
+        /* @__PURE__ */ React.createElement(TplThumb, { tpl: t, on }),
+        /* @__PURE__ */ React.createElement("span", { className: "font-ui font-extrabold text-[13px] leading-none" }, t.label)
+      );
+    }))), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(Label, null, "Canvas shape"), /* @__PURE__ */ React.createElement("div", { className: "grid grid-cols-3 gap-2" }, ASPECTS.map((a) => {
+      const on = a.id === look.aspect;
+      const w = a.w >= a.h ? 34 : Math.round(34 * (a.w / a.h));
+      const h = a.h >= a.w ? 34 : Math.round(34 * (a.h / a.w));
+      return /* @__PURE__ */ React.createElement(
+        "button",
+        {
+          key: a.id,
+          type: "button",
+          onClick: () => setLook((l) => ({ ...l, aspect: a.id })),
+          "aria-pressed": on,
+          className: `border-[3px] border-black px-1 py-2 flex flex-col items-center gap-1 ${on ? "bg-hot shadow-[3px_3px_0_#000] -translate-y-[1px]" : "bg-white hover:bg-[#fff3c4]"}`
+        },
+        /* @__PURE__ */ React.createElement("div", { className: "h-[36px] flex items-center" }, /* @__PURE__ */ React.createElement("div", { className: "border-[3px] border-black bg-paper", style: { width: w, height: h } })),
+        /* @__PURE__ */ React.createElement("span", { className: "font-ui font-extrabold text-[16px] leading-none" }, a.id),
+        /* @__PURE__ */ React.createElement("span", { className: "font-ui text-[12px] leading-none" }, a.note)
+      );
+    }))), /* @__PURE__ */ React.createElement("div", { className: "flex flex-col gap-3" }, /* @__PURE__ */ React.createElement(Label, null, "Frame"), /* @__PURE__ */ React.createElement(Slider, { id: "thick", label: "Thickness", value: look.thick, min: 0, max: 24, onChange: (v) => setLook((l) => ({ ...l, thick: v })), readout: `${look.thick} px` }), /* @__PURE__ */ React.createElement(Slider, { id: "radius", label: "Corner radius", value: look.radius, min: 0, max: 40, onChange: (v) => setLook((l) => ({ ...l, radius: v })), readout: `${look.radius} px` }), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { className: "font-ui font-bold uppercase tracking-[.08em] text-[13px] mb-1.5" }, "Frame colour"), /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-2" }, /* @__PURE__ */ React.createElement(
+      "input",
+      {
+        id: "frame-color",
+        type: "color",
+        value: look.color,
+        onChange: (e) => setColor(e.target.value),
+        className: "w-11 h-9 border-[3px] border-black bg-white p-0 cursor-pointer",
+        "aria-label": "Pick frame colour"
+      }
+    ), /* @__PURE__ */ React.createElement(
+      "input",
+      {
+        id: "frame-hex",
+        type: "text",
+        value: hex,
+        maxLength: 7,
+        spellCheck: false,
+        "aria-label": "Frame colour hex code",
+        onChange: (e) => {
+          setHex(e.target.value);
+          if (/^#[0-9a-fA-F]{6}$/.test(e.target.value)) setColor(e.target.value.toLowerCase());
+        },
+        className: "w-[96px] font-ui font-bold text-[16px] uppercase tabular-nums bg-white border-[3px] border-black px-2 py-1"
+      }
+    ), /* @__PURE__ */ React.createElement("div", { className: "flex flex-wrap gap-1.5" }, [C.hot, C.lime, C.pink, C.sky, C.gold, "#0b0b0d", "#ffffff"].map((c) => /* @__PURE__ */ React.createElement("button", { key: c, type: "button", onClick: () => setColor(c), "aria-label": `Use ${c}`, className: "w-6 h-6 border-[2.5px] border-black", style: { background: c, outline: look.color === c ? "3px solid #fff" : "none", outlineOffset: 1 } })))))));
+  }
+  function Meter({ level, color }) {
+    return /* @__PURE__ */ React.createElement("div", { className: "h-2.5 w-full bg-black/80 border-2 border-black" }, /* @__PURE__ */ React.createElement("div", { className: "h-full", style: { width: `${clamp(level, 0, 1) * 100}%`, background: level > 0.85 ? C.blood : color } }));
+  }
+  function AudioTab({ mode, setMode, slots, n, active, tr, patchMix, sends, setSends }) {
+    const rows = slots.slice(0, n);
+    const s = slots[active];
+    const playing = tr.mode === "playing" || tr.mode === "recording";
+    const level = (sl) => sl.take && playing && !sl.mix.mute ? 0.28 + 0.6 * Math.abs(Math.sin(tr.beat * 2.1 + sl.take.seed)) : 0;
+    return /* @__PURE__ */ React.createElement("div", { className: "flex flex-col gap-4" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(Label, null, "Audio mode"), /* @__PURE__ */ React.createElement("div", { className: "grid grid-cols-2 gap-2" }, [["daw", "DAW routed"], ["int", "Internal mixer"]].map(([id, text]) => /* @__PURE__ */ React.createElement(Btn, { key: id, color: mode === id ? "lime" : "bone", onClick: () => setMode(id), pressed: mode === id }, text)))), mode === "daw" ? /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("p", { className: "font-ui text-[15px] leading-snug mb-3" }, "Mix on your DAW tracks. Griddy listens to the audio routed from each assigned track, so fader moves in the DAW show up here."), /* @__PURE__ */ React.createElement("div", { className: "flex flex-col gap-2" }, rows.map((sl, i) => /* @__PURE__ */ React.createElement("div", { key: sl.id, className: "grid grid-cols-[24px_1fr] items-center gap-2" }, /* @__PURE__ */ React.createElement("span", { className: "font-sign text-[11px] leading-none px-1 py-[3px] border-2 border-black text-center", style: { background: sl.color } }, i + 1), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { className: "font-ui font-bold uppercase text-[13px] leading-none mb-1 truncate" }, trackName(sl.trackId)), /* @__PURE__ */ React.createElement(Meter, { level: level(sl), color: sl.color })))))) : /* @__PURE__ */ React.createElement("div", { className: "flex flex-col gap-4" }, /* @__PURE__ */ React.createElement("div", { className: "border-[3px] border-black bg-[#e7e2d3] p-3 shadow-[3px_3px_0_#000] flex flex-col gap-3" }, /* @__PURE__ */ React.createElement("div", { className: "flex items-center justify-between" }, /* @__PURE__ */ React.createElement("span", { className: "font-ui font-extrabold uppercase text-[16px]" }, "Slot ", active + 1, " \xB7 ", trackName(s.trackId)), /* @__PURE__ */ React.createElement("div", { className: "flex gap-1.5" }, /* @__PURE__ */ React.createElement(Btn, { small: true, color: s.mix.mute ? "blood" : "bone", pressed: s.mix.mute, onClick: () => patchMix({ mute: !s.mix.mute }), label: "Mute this slot" }, "M"), /* @__PURE__ */ React.createElement(Btn, { small: true, color: s.mix.solo ? "gold" : "bone", pressed: s.mix.solo, onClick: () => patchMix({ solo: !s.mix.solo }), label: "Solo this slot" }, "S"))), /* @__PURE__ */ React.createElement(Slider, { id: "gain", label: "Gain", value: s.mix.gain, min: -60, max: 6, step: 0.5, onChange: (v) => patchMix({ gain: v }), readout: fmtDb(s.mix.gain), color: s.color === C.bone ? C.hot : s.color }), /* @__PURE__ */ React.createElement(Slider, { id: "pan", label: "Pan", value: s.mix.pan, min: -100, max: 100, onChange: (v) => patchMix({ pan: v }), readout: s.mix.pan === 0 ? "Centre" : (s.mix.pan < 0 ? "L " : "R ") + Math.abs(s.mix.pan), color: C.sky }), /* @__PURE__ */ React.createElement(Slider, { id: "hpf", label: "High pass", value: s.mix.hpf, min: 20, max: 400, onChange: (v) => patchMix({ hpf: v }), readout: s.mix.hpf <= 20 ? "Off" : `${s.mix.hpf} Hz`, color: C.pink })), /* @__PURE__ */ React.createElement("div", { className: "border-[3px] border-black bg-[#e7e2d3] p-3 shadow-[3px_3px_0_#000] flex flex-col gap-3" }, /* @__PURE__ */ React.createElement(Label, null, "Shared sends"), /* @__PURE__ */ React.createElement(Slider, { id: "rev", label: "Reverb", value: sends.reverb, min: 0, max: 100, onChange: (v) => setSends((x) => ({ ...x, reverb: v })), readout: `${sends.reverb}%`, color: C.violet }), /* @__PURE__ */ React.createElement(Slider, { id: "dly", label: "Delay", value: sends.delay, min: 0, max: 100, onChange: (v) => setSends((x) => ({ ...x, delay: v })), readout: `${sends.delay}%`, color: C.mint }))));
+  }
+  function ExportSheet({ onClose, aspect, n }) {
+    const [codec, setCodec] = useState("H.264");
+    const [audio, setAudio] = useState("AAC");
+    const [mbps, setMbps] = useState(40);
+    const [p, setP] = useState(null);
+    useEffect(() => {
+      if (p === null || p >= 100) return;
+      const t = setTimeout(() => setP((v) => Math.min(100, v + 4 + Math.random() * 6)), 120);
+      return () => clearTimeout(t);
+    }, [p]);
+    useEffect(() => {
+      const k = (e) => e.key === "Escape" && onClose();
+      window.addEventListener("keydown", k);
+      return () => window.removeEventListener("keydown", k);
+    }, []);
+    const a = ASPECTS.find((x) => x.id === aspect);
+    return /* @__PURE__ */ React.createElement("div", { className: "fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4", onClick: onClose }, /* @__PURE__ */ React.createElement("div", { role: "dialog", "aria-modal": "true", "aria-label": "Export MP4", className: "paper tape relative w-full max-w-[520px] p-5", onClick: (e) => e.stopPropagation() }, /* @__PURE__ */ React.createElement("div", { className: "flex items-center justify-between mb-4" }, /* @__PURE__ */ React.createElement("h2", { className: "font-sign text-[28px] leading-none" }, "Export MP4"), /* @__PURE__ */ React.createElement(Btn, { small: true, onClick: onClose }, "Close")), /* @__PURE__ */ React.createElement("div", { className: "grid grid-cols-2 gap-4 mb-4" }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(Label, null, "Video"), /* @__PURE__ */ React.createElement("div", { className: "grid grid-cols-2 gap-2" }, ["H.264", "HEVC"].map((c) => /* @__PURE__ */ React.createElement(Btn, { key: c, small: true, color: codec === c ? "lime" : "bone", pressed: codec === c, onClick: () => setCodec(c) }, c)))), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(Label, null, "Audio, 48 kHz"), /* @__PURE__ */ React.createElement("div", { className: "grid grid-cols-2 gap-2" }, ["AAC", "PCM 24 bit"].map((c) => /* @__PURE__ */ React.createElement(Btn, { key: c, small: true, color: audio === c ? "lime" : "bone", pressed: audio === c, onClick: () => setAudio(c) }, c))))), /* @__PURE__ */ React.createElement(Slider, { id: "mbps", label: "Bitrate", value: mbps, min: 10, max: 80, onChange: setMbps, readout: `${mbps} Mbps` }), /* @__PURE__ */ React.createElement("div", { className: "font-ui text-[15px] mt-3 mb-4" }, a.out, " \xB7 ", a.id, " \xB7 ", n, " ", n === 1 ? "panel" : "panels", " \xB7 ", codec, " with ", audio === "AAC" ? "AAC" : "24 bit PCM", " audio from the master bounce."), p === null ? /* @__PURE__ */ React.createElement(Btn, { color: "hot", onClick: () => setP(1), className: "w-full" }, "Render on GPU") : /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { className: "h-6 border-[3px] border-black bg-white" }, /* @__PURE__ */ React.createElement("div", { className: "h-full bg-lime", style: { width: `${p}%`, transition: "width .1s linear" } })), /* @__PURE__ */ React.createElement("div", { className: "font-ui font-bold text-[14px] mt-2" }, p < 100 ? `Compositing and encoding ${Math.floor(p)}%` : "Done. This is a prototype, so no file was written."))));
+  }
+  function App() {
+    const [slots, setSlots] = useState(startSlots);
+    const [active, setActive] = useState(2);
+    const [look, setLook] = useState({ tpl: "2x2", aspect: "16:9", thick: 6, radius: 14, color: C.hot });
+    const [audioMode, setAudioMode] = useState("daw");
+    const [sends, setSends] = useState({ reverb: 18, delay: 10 });
+    const [loopOn, setLoopOn] = useState(true);
+    const [countIn, setCountIn] = useState(true);
+    const [tab, setTab] = useState("slot");
+    const [toast, setToast] = useState(null);
+    const [tr, setTr] = useState({ mode: "stopped", beat: 0, count: 0 });
+    const [exportOpen, setExportOpen] = useState(false);
+    const trRef = useRef(tr);
+    const loopRef = useRef(loopOn);
+    loopRef.current = loopOn;
+    const recSlot = useRef(null);
+    const toastTimer = useRef(null);
+    const setTrBoth = (v) => {
+      trRef.current = v;
+      setTr(v);
+    };
+    const say = (text) => {
+      setToast(text);
+      clearTimeout(toastTimer.current);
+      toastTimer.current = setTimeout(() => setToast(null), 2200);
+    };
+    const tpl = TEMPLATES.find((t) => t.id === look.tpl);
+    const n = tpl.cells.length;
+    const aspect = ASPECTS.find((a) => a.id === look.aspect);
+    const ratio = aspect.w / aspect.h;
+    const act = Math.min(active, n - 1);
+    const slot = slots[act];
+    const patchSlot = (i, fn) => setSlots((s) => s.map((x, k) => k === i ? { ...x, ...fn(x) } : x));
+    const endTake = (len) => {
+      const i = recSlot.current;
+      recSlot.current = null;
+      if (i == null) return;
+      if (len < 2) {
+        say("That take was too short, so it was dropped");
+        return;
+      }
+      setSlots((s) => s.map((x, k) => k === i ? { ...x, status: "review", prev: x.status === "approved" ? x.take : x.prev, take: makeTake(Math.min(len, LOOP_END), 0, Math.floor(Math.random() * 900) + 50) } : x));
+      say(`Slot ${i + 1} recorded. Keep it or retake it.`);
+    };
+    useEffect(() => {
+      let raf;
+      let last = performance.now();
+      const frame = (now) => {
+        const dt = Math.min(0.1, (now - last) / 1e3);
+        last = now;
+        const cur = trRef.current;
+        let next = cur;
+        if (cur.mode === "countin") {
+          const count = cur.count - dt * BPS;
+          next = count <= 0 ? { mode: "recording", beat: 0, count: 0 } : { ...cur, count };
+        } else if (cur.mode === "playing" || cur.mode === "recording") {
+          let beat = cur.beat + dt * BPS;
+          const end = loopRef.current ? LOOP_END : PROJECT_END;
+          if (beat >= end) {
+            if (cur.mode === "recording") {
+              endTake(end);
+              next = { mode: "stopped", beat: 0, count: 0 };
+            } else if (loopRef.current) next = { ...cur, beat: beat - LOOP_END };
+            else next = { mode: "stopped", beat: 0, count: 0 };
+          } else next = { ...cur, beat };
+        }
+        if (next !== cur) {
+          trRef.current = next;
+          setTr(next);
+        }
+        raf = requestAnimationFrame(frame);
+      };
+      raf = requestAnimationFrame(frame);
+      return () => cancelAnimationFrame(raf);
+    }, []);
+    const rec = () => {
+      const cur = trRef.current;
+      if (cur.mode === "countin") {
+        recSlot.current = null;
+        setTrBoth({ mode: "stopped", beat: 0, count: 0 });
+        return;
+      }
+      if (cur.mode === "recording") {
+        endTake(cur.beat);
+        setTrBoth({ mode: "stopped", beat: 0, count: 0 });
+        return;
+      }
+      if (slot.status === "review") {
+        say(`Keep or retake the take in slot ${act + 1} first`);
+        return;
+      }
+      recSlot.current = act;
+      setTrBoth(countIn ? { mode: "countin", beat: 0, count: 4 } : { mode: "recording", beat: 0, count: 0 });
+    };
+    const playPause = () => {
+      const cur = trRef.current;
+      if (cur.mode === "playing") setTrBoth({ ...cur, mode: "stopped" });
+      else if (cur.mode === "stopped") setTrBoth({ ...cur, mode: "playing" });
+      else rec();
+    };
+    const stop = () => {
+      const cur = trRef.current;
+      if (cur.mode === "recording" || cur.mode === "countin") rec();
+      else setTrBoth({ mode: "stopped", beat: 0, count: 0 });
+    };
+    const seek = (beat) => {
+      const cur = trRef.current;
+      if (cur.mode === "recording" || cur.mode === "countin") {
+        say("Stop recording before you move the playhead");
+        return;
+      }
+      setTrBoth({ ...cur, beat });
+    };
+    const select = (i) => {
+      if (trRef.current.mode === "recording" || trRef.current.mode === "countin") {
+        say("Stop recording before you pick another slot");
+        return;
+      }
+      setActive(i);
+      if (i !== act) setTab("slot");
+    };
+    const keep = (i) => {
+      patchSlot(i, () => ({ status: "approved", prev: null }));
+      say(`Slot ${i + 1} approved`);
+    };
+    const retake = (i) => {
+      patchSlot(i, (x) => x.prev ? { status: "approved", take: x.prev, prev: null } : { status: "empty", take: null, prev: null });
+      say(`Take discarded. Slot ${i + 1} is live again.`);
+    };
+    const clearSlot = (i) => {
+      patchSlot(i, () => ({ status: "empty", take: null, prev: null }));
+      say(`Slot ${i + 1} cleared`);
+    };
+    const nudge = (i, ms) => patchSlot(i, (x) => x.take ? { take: { ...x.take, offsetMs: clamp(Math.round((x.take.offsetMs + ms) * 10) / 10, -500, 500) } } : {});
+    const resetSlip = (i) => patchSlot(i, (x) => x.take ? { take: { ...x.take, offsetMs: 0 } } : {});
+    const setTrack = (i, id) => setSlots((s) => {
+      const old = s[i].trackId;
+      return s.map((x, k) => k === i ? { ...x, trackId: id } : x.trackId === id ? { ...x, trackId: old } : x);
+    });
+    const patchMix = (i, p) => patchSlot(i, (x) => ({ mix: { ...x.mix, ...p } }));
+    useEffect(() => {
+      const onKey = (e) => {
+        const el = e.target;
+        const tag = el && el.tagName;
+        if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return;
+        if (e.key === " " && tag !== "BUTTON" && !(el && el.getAttribute && el.getAttribute("role") === "button")) {
+          e.preventDefault();
+          playPause();
+        }
+        if ((e.key === "r" || e.key === "R") && !e.metaKey && !e.ctrlKey) rec();
+        if ((e.key === "k" || e.key === "K") && slots[act].status === "review") keep(act);
+      };
+      window.addEventListener("keydown", onKey);
+      return () => window.removeEventListener("keydown", onKey);
+    });
+    const areaRef = useRef(null);
+    const [box, setBox] = useState({ w: 640, h: 360 });
+    useEffect(() => {
+      const el = areaRef.current;
+      const measure = () => {
+        const r = el.getBoundingClientRect();
+        let w = r.width, h = r.width / ratio;
+        if (h > r.height) {
+          h = r.height;
+          w = h * ratio;
+        }
+        setBox({ w: Math.max(120, Math.floor(w)), h: Math.max(120, Math.floor(h)) });
+      };
+      measure();
+      const ro = new ResizeObserver(measure);
+      ro.observe(el);
+      return () => ro.disconnect();
+    }, [ratio]);
+    const anySolo = slots.slice(0, n).some((s) => s.mix.solo);
+    const isRec = tr.mode === "recording" || tr.mode === "countin";
+    const playing = tr.mode === "playing" || tr.mode === "recording";
+    const inputMon = tr.mode === "stopped" ? "ON" : "MUTED";
+    const playMon = playing ? "ON" : "OFF";
+    const innerW = box.w - 6 - look.thick * (tpl.cols + 1);
+    const innerH = box.h - 6 - look.thick * (tpl.rows + 1);
+    const densFor = (c) => {
+      const w = innerW / tpl.cols * c[2] + look.thick * (c[2] - 1);
+      const h = innerH / tpl.rows * c[3] + look.thick * (c[3] - 1);
+      return w < 190 || h < 125 ? "tiny" : w < 300 || h < 190 ? "compact" : "full";
+    };
+    return /* @__PURE__ */ React.createElement("div", { className: "h-full flex flex-col" }, /* @__PURE__ */ React.createElement("header", { className: "flex flex-wrap items-center gap-x-7 gap-y-3 px-5 pt-5 pb-3" }, /* @__PURE__ */ React.createElement("div", { className: "relative select-none shrink-0 pr-2 pb-3" }, /* @__PURE__ */ React.createElement("h1", { className: "font-sign italic text-[46px] leading-none text-hot", style: { WebkitTextStroke: "2.5px #000", paintOrder: "stroke fill", textShadow: "4px 4px 0 #000", transform: "rotate(-3deg)" } }, "Griddy"), /* @__PURE__ */ React.createElement("span", { className: "absolute -right-3 -bottom-0.5" }, /* @__PURE__ */ React.createElement(Sticker, { color: C.gold, rotate: 5, className: "text-[11px]" }, "OVERDUB CAM"))), /* @__PURE__ */ React.createElement("div", { className: "flex items-center gap-2.5", role: "group", "aria-label": "Transport, simulated DAW" }, /* @__PURE__ */ React.createElement(Btn, { color: "ink", onClick: stop, label: "Stop and go to start", title: "Stop and return to the start" }, "\u25A0"), /* @__PURE__ */ React.createElement(Btn, { color: playing && tr.mode === "playing" ? "lime" : "bone", onClick: playPause, pressed: tr.mode === "playing", label: "Play or pause", title: "Play or pause (Space)" }, tr.mode === "playing" ? "\u275A\u275A" : "\u25B6"), /* @__PURE__ */ React.createElement(Btn, { color: "blood", onClick: rec, pressed: isRec, title: "Record into the target slot from the top of the loop (R)", className: isRec ? "rec-pulse" : "" }, isRec ? "\u25CF Stop rec" : "\u25CF Rec"), /* @__PURE__ */ React.createElement(Btn, { color: loopOn ? "hot" : "ink", onClick: () => setLoopOn((v) => !v), pressed: loopOn, small: true, title: "Loop bars 1 to 4" }, "Loop"), /* @__PURE__ */ React.createElement(Btn, { color: countIn ? "gold" : "ink", onClick: () => setCountIn((v) => !v), pressed: countIn, small: true, title: "One bar count in before recording" }, "Count in")), /* @__PURE__ */ React.createElement("div", { className: "flex items-end gap-3" }, /* @__PURE__ */ React.createElement("div", { className: "font-sign italic leading-none text-paper tabular-nums", style: { fontSize: 54, WebkitTextStroke: "2.5px #000", paintOrder: "stroke fill", textShadow: "4px 4px 0 " + C.hot }, "aria-label": "Bar and beat" }, barBeat(tr.beat)), /* @__PURE__ */ React.createElement("div", { className: "pb-1" }, /* @__PURE__ */ React.createElement("span", { className: "font-ui font-extrabold text-[14px] px-2 py-0.5 bg-black text-lime border-2 border-black" }, BPM, " BPM \xB7 4/4"))), /* @__PURE__ */ React.createElement("div", { className: "ml-auto flex flex-wrap items-center gap-2.5" }, /* @__PURE__ */ React.createElement(Btn, { color: "gold", onClick: () => setExportOpen(true) }, "Export MP4"))), /* @__PURE__ */ React.createElement("main", { className: "flex-1 min-h-0 flex gap-5 px-5 pb-5 max-lg:flex-col max-lg:overflow-y-auto" }, /* @__PURE__ */ React.createElement("section", { className: "flex-1 min-w-0 min-h-0 flex flex-col max-lg:min-h-[520px]" }, /* @__PURE__ */ React.createElement("div", { className: "flex-1 min-h-0 relative" }, /* @__PURE__ */ React.createElement("div", { ref: areaRef, className: "absolute inset-0 flex items-center justify-center" }, /* @__PURE__ */ React.createElement("div", { className: "relative", style: { width: box.w, height: box.h } }, /* @__PURE__ */ React.createElement(
+      "div",
+      {
+        className: "relative grid",
+        style: {
+          width: box.w,
+          height: box.h,
+          background: look.color,
+          padding: look.thick,
+          gap: look.thick,
+          gridTemplateColumns: `repeat(${tpl.cols},minmax(0,1fr))`,
+          gridTemplateRows: `repeat(${tpl.rows},minmax(0,1fr))`,
+          borderRadius: look.radius + look.thick * 0.5,
+          boxShadow: "8px 8px 0 #000",
+          border: "3px solid #000"
+        }
+      },
+      tpl.cells.map((c, i) => /* @__PURE__ */ React.createElement("div", { key: i, style: { gridColumn: `${c[0]} / span ${c[2]}`, gridRow: `${c[1]} / span ${c[3]}`, borderRadius: look.radius, overflow: "hidden", minWidth: 0, minHeight: 0 } }, /* @__PURE__ */ React.createElement(
+        Tile,
+        {
+          slot: slots[i],
+          idx: i,
+          isActive: act === i,
+          tr,
+          dens: densFor(c),
+          anySolo,
+          onSelect: () => select(i),
+          onKeep: () => keep(i),
+          onRetake: () => retake(i),
+          onNudge: (ms) => nudge(i, ms)
+        }
+      )))
+    ), /* @__PURE__ */ React.createElement("span", { className: "absolute -top-3 -left-3 w-16 h-5 tape-piece", style: { transform: "rotate(-38deg)" } }), /* @__PURE__ */ React.createElement("span", { className: "absolute -top-3 -right-3 w-16 h-5 tape-piece", style: { transform: "rotate(36deg)" } })))), /* @__PURE__ */ React.createElement("div", { className: "flex flex-wrap items-center justify-end gap-2 pt-3" }, /* @__PURE__ */ React.createElement("span", { title: "Sample values for this prototype. The plugin will measure the round trip and shift new takes by it.", className: "font-ui font-bold uppercase text-[12px] px-2 py-1 bg-black/80 text-paper border-2 border-black" }, "Latency comp auto \xB7 \u221223.4 ms"), /* @__PURE__ */ React.createElement("span", { className: "font-ui font-bold uppercase text-[12px] px-2 py-1 bg-black/80 text-paper border-2 border-black flex gap-2", title: "Input monitor mutes by itself during playback so the mic can't feed back" }, /* @__PURE__ */ React.createElement("span", null, "Input ", /* @__PURE__ */ React.createElement("b", { style: { color: inputMon === "ON" ? C.lime : C.blood } }, inputMon)), /* @__PURE__ */ React.createElement("span", null, "Playback ", /* @__PURE__ */ React.createElement("b", { style: { color: playMon === "ON" ? C.lime : "#9a98a0" } }, playMon)))), /* @__PURE__ */ React.createElement(Timeline, { slots, n, tr, active: act, onActive: select, onSeek: seek, loopOn })), /* @__PURE__ */ React.createElement("aside", { className: "w-[372px] max-lg:w-full shrink-0 min-h-0 overflow-y-auto pr-1 pb-2" }, /* @__PURE__ */ React.createElement("div", { className: "paper tape relative p-4 mt-3", style: { transform: "rotate(.4deg)" } }, /* @__PURE__ */ React.createElement("div", { role: "tablist", "aria-label": "Inspector", className: "flex gap-2 mb-4" }, [["slot", "Slot", C.hot], ["look", "Look", C.sky], ["audio", "Audio", C.pink]].map(([id, text, col]) => /* @__PURE__ */ React.createElement(
+      "button",
+      {
+        key: id,
+        id: `tab-${id}`,
+        role: "tab",
+        "aria-selected": tab === id,
+        "aria-controls": "panel",
+        type: "button",
+        onClick: () => setTab(id),
+        className: "btn flex-1 font-ui font-extrabold uppercase tracking-wide text-[16px] py-1.5 text-ink",
+        style: { background: tab === id ? col : "#e7e2d3", transform: tab === id ? "skewX(-8deg) translateY(-2px)" : void 0, boxShadow: tab === id ? "4px 4px 0 #000" : "2px 2px 0 #000" }
+      },
+      /* @__PURE__ */ React.createElement("span", null, text)
+    ))), /* @__PURE__ */ React.createElement("div", { id: "panel", role: "tabpanel", "aria-labelledby": `tab-${tab}` }, tab === "slot" && /* @__PURE__ */ React.createElement(
+      SlotTab,
+      {
+        slot,
+        idx: act,
+        tr,
+        tracks: slots.slice(0, n).map((s) => s.trackId),
+        onTrack: (id) => setTrack(act, id),
+        onKeep: () => keep(act),
+        onRetake: () => retake(act),
+        onClear: () => clearSlot(act),
+        onNudge: (ms) => nudge(act, ms),
+        onResetSlip: () => resetSlip(act)
+      }
+    ), tab === "look" && /* @__PURE__ */ React.createElement(LookTab, { look, setLook, tpl }), tab === "audio" && /* @__PURE__ */ React.createElement(AudioTab, { mode: audioMode, setMode: setAudioMode, slots, n, active: act, tr, patchMix: (p) => patchMix(act, p), sends, setSends }))))), toast && /* @__PURE__ */ React.createElement("div", { className: "fixed left-1/2 bottom-6 -translate-x-1/2 z-40 toast", role: "status" }, /* @__PURE__ */ React.createElement(Sticker, { color: C.paper || "#f3efe4", rotate: -1, className: "text-[16px] px-3 py-2" }, toast)), exportOpen && /* @__PURE__ */ React.createElement(ExportSheet, { onClose: () => setExportOpen(false), aspect: look.aspect, n }));
+  }
+  ReactDOM.createRoot(document.getElementById("root")).render(/* @__PURE__ */ React.createElement(App, null));
+})();
+
+</script>
+</body>
+</html>
