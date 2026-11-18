@@ -19,5 +19,6 @@ void hubSessions (const Report& report);
 void hubResetSlot (const Report& report);
 void hubUiStatus (const Report& report);
 void hubLiveRecordStart (const Report& report);
+void hubFilm (const Report& report);
 
 } // namespace griddy::harness

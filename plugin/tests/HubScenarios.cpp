@@ -588,5 +588,139 @@ void hubLiveRecordStart (const Report& report)
                   + juce::String ((takeStart() - heard) * 500.0, 1) + " ms off)");
 }
 
+// Film: the Film button for a clip clicked in Live, as the Live script answers it. Griddy films only while Live plays the
+// clip asked for, never touches the arm, ends at the clip's end, and writes the file and where in it the take starts.
+void hubFilm (const Report& report)
+{
+    HubWorld w (report);
+    auto& one = *w.instances[0];
+    const auto file = liveTimelineFile();
+    constexpr double sr = 44100.0;
+
+    // The script's file: slot 1's track with a recording of /Live/Hats.wav from 4 to 8 s, from the file's start.
+    auto writeLive = [&] (bool selected, bool loops, double filmFrom, double filmTo, bool recording)
+    {
+        juce::String clip = "{\"start\":4.0,\"end\":8.0,\"active\":true,\"file\":0,\"born\":1000.0"
+                          + juce::String (loops ? "" : ",\"origin\":4.0") + (selected ? ",\"selected\":true,\"bar\":3" : "") + "}";
+        juce::String track = "{\"name\":\"1-Audio\",\"slot\":\"1\",\"armed\":false,\"audible\":true,\"arrangement\":true,"
+                             "\"files\":[\"/Live/Hats.wav\"],\"clips\":[" + clip + "]"
+                           + (filmTo > 0.0 ? ",\"film\":{\"from\":" + juce::String (filmFrom, 6) + ",\"to\":" + juce::String (filmTo, 6) + "}" : juce::String())
+                           + "}";
+        file.replaceWithText ("{\"version\":1,\"written\":" + juce::String ((double) juce::Time::currentTimeMillis() / 1000.0, 3)
+                              + ",\"recording\":" + (recording ? "true" : "false") + ",\"tracks\":[" + track + "]}");
+    };
+    auto film = [&] { return w.hub->getStatus (one.member).getProperty ("film", {}); };
+    auto lastRequest = [&]
+    {
+        const auto v = juce::JSON::parse (liveRequestsFile().loadFileAsString());
+        const auto* list = v.getProperty ("requests", {}).getArray();
+        return list != nullptr && ! list->isEmpty() ? list->getLast() : juce::var();
+    };
+    auto newestMeta = [&]
+    {
+        juce::File newest;
+        for (const auto& f : w.root.findChildFiles (juce::File::findFiles, true, "take.json"))
+            if (newest == juce::File() || f.getLastModificationTime() > newest.getLastModificationTime())
+                newest = f;
+        return juce::JSON::parse (newest.loadFileAsString());
+    };
+    auto takeCount = [&] { return w.hub->getStatus (one.member).getProperty ("takes", {})[0].size(); };
+    auto keepTimelineFresh = [&] (double seconds, std::function<void()> write)
+    {
+        for (double t = 0.0; t < seconds; t += 0.25)
+        {
+            write();
+            pump (0.25);
+        }
+    };
+
+    writeLive (false, false, 0.0, 0.0, false);
+    pump (0.5);
+    report.check ((bool) film().getProperty ("available", false), "with the Live script, Film is available on a track's Griddy");
+    report.check (w.hub->requestFilm (one.member, -1).isNotEmpty(), "with no clip clicked in Live, Film says why and does nothing");
+    if (getenv ("GRIDDY_DEBUG"))
+        report.say ("   film status: " + juce::JSON::toString (film(), true));
+    const auto listed = film().getProperty ("recordings", {});
+    const auto* recs = listed.getArray();
+    report.check (recs != nullptr && recs->size() == 1 && recs->getFirst().getProperty ("name", {}).toString() == "Hats"
+                  && recs->getFirst().getProperty ("video", {}).toString() == "none",
+                  "the Slot tab's list has the track's recording, with no video");
+
+    writeLive (true, true, 0.0, 0.0, false);
+    pump (0.3);
+    report.check (w.hub->requestFilm (one.member, -1).contains ("loops"), "a clip that loops past its end cannot be filmed, and Film says so");
+
+    writeLive (true, false, 0.0, 0.0, false);
+    pump (0.3);
+    const auto chosen = film().getProperty ("selected", {});
+    report.check (chosen.getProperty ("name", {}).toString() == "Hats" && (int) chosen.getProperty ("bar", 0) == 3,
+                  "the clip clicked in Live shows as what Film films for, with its bar");
+
+    // Film: Griddy asks Live to play the clip. Until the script says Live plays it, nothing is filmed.
+    const auto before = takeCount();
+    w.daw->tone = 0.3f;
+    w.daw->playFrom ((int64_t) (6.0 * sr));
+    report.check (w.hub->requestFilm (one.member, -1).isEmpty(), "Film on the clicked clip is asked of Live");
+    const auto asked = lastRequest();
+    report.check (asked.getProperty ("action", {}).toString() == "film" && (double) asked.getProperty ("from", 0.0) == 4.0
+                  && (double) asked.getProperty ("to", 0.0) == 8.0, "the request names the clip's start and end");
+    pump (0.4);
+    report.check (! w.hub->isSlotRecording (0), "while Live has not said it plays the clip, Griddy does not film where Live was");
+
+    // The script jumps a bar before the clip (2 s at 120 BPM) and says so.
+    w.daw->playFrom ((int64_t) (2.0 * sr));
+    keepTimelineFresh (1.0, [&] { writeLive (true, false, 2.0, 8.0, false); });
+    report.check (w.hub->isSlotRecording (0), "once Live plays the clip, Griddy films");
+    report.check ((bool) film().getProperty ("filming", false), "and the status says it films, for the tile's \"FILM\"");
+    report.check (one.arm.load() < 0.5f, "without arming anything");
+    keepTimelineFresh (5.5, [&] { writeLive (true, false, 2.0, 8.0, false); });
+    report.check (! w.hub->isSlotRecording (0), "at the clip's end the film take ends, even before Live stops");
+    w.daw->stop();
+    writeLive (true, false, 0.0, 0.0, false);
+    pump (2.0);
+    report.check (takeCount() == before + 1, "one film take");
+    {
+        const auto meta = newestMeta();
+        const auto f = meta.getProperty ("filmedFor", {});
+        const auto start = (double) (juce::int64) meta.getProperty ("startHostSample", 0) / (double) meta.getProperty ("sampleRate", sr);
+        const auto lead = (double) f.getProperty ("lead", 99.0);
+        report.check (f.getProperty ("path", {}).toString() == "/Live/Hats.wav" && (double) f.getProperty ("born", 0.0) == 1000.0,
+                      "the take says which file it was filmed for");
+        report.check (std::abs (lead - (start - 4.0)) < 1.0e-6 && std::abs (lead + 2.0) < 0.03,
+                      "and where in it the take starts: " + juce::String (lead, 3) + " s, from where filming began");
+    }
+    report.check (! (bool) film().getProperty ("armed", true), "one take per press: Film is ready again");
+    report.check (film().getProperty ("recordings", {})[0].getProperty ("video", {}).toString() == "filmed",
+                  "and the recording now shows as filmed");
+
+    // Stop film early.
+    w.daw->playFrom ((int64_t) (2.0 * sr));
+    w.hub->requestFilm (one.member, -1);
+    keepTimelineFresh (1.0, [&] { writeLive (true, false, 2.0, 8.0, false); });
+    report.check (w.hub->isSlotRecording (0) && w.hub->stopFilm (one.member), "Stop film while filming");
+    pump (0.3);
+    report.check (! w.hub->isSlotRecording (0) && lastRequest().getProperty ("action", {}).toString() == "filmstop",
+                  "ends the take at once and asks Live to stop");
+    w.daw->stop();
+    writeLive (true, false, 0.0, 0.0, false);
+    pump (1.5);
+
+    // Live starts recording during filming: filming ends.
+    w.daw->playFrom ((int64_t) (2.0 * sr));
+    w.hub->requestFilm (one.member, -1);
+    keepTimelineFresh (0.75, [&] { writeLive (true, false, 2.0, 8.0, false); });
+    keepTimelineFresh (0.5, [&] { writeLive (true, false, 2.0, 8.0, true); });
+    report.check (! w.hub->isSlotRecording (0) && ! (bool) film().getProperty ("armed", true), "Live recording during filming ends the film");
+    w.daw->stop();
+    writeLive (true, false, 0.0, 0.0, false);
+    pump (1.5);
+
+    // Live never plays it.
+    const auto count = takeCount();
+    w.hub->requestFilm (one.member, -1);
+    keepTimelineFresh (3.5, [&] { writeLive (true, false, 0.0, 0.0, false); });
+    report.check (! (bool) film().getProperty ("armed", true) && takeCount() == count, "Film gives up when Live never plays the clip");
+}
+
 } // namespace griddy::harness
 

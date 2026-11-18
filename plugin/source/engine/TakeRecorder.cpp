@@ -127,6 +127,8 @@ public:
         {
             auto& m = owner.entry.meta;
             m.startPpq += (double) (first - m.startHostSample) / m.sampleRate * m.bpm / 60.0;
+            if (m.isFilm())
+                m.filmLead += (double) (first - m.startHostSample) / m.sampleRate; // still where the audio starts in the file
             m.startHostSample = first;
         }
 
