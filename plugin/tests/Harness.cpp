@@ -426,6 +426,9 @@ struct Sample
     bool black = false;    // the picture really is black
 };
 
+/** How many samples from `from` to `to` (seconds since the run started) satisfy f; the number in range goes to total. */
+int countIf (const std::vector<Sample>& s, double from, double to, const std::function<bool (const Sample&)>& f, int* total = nullptr);
+
 struct World
 {
     std::unique_ptr<PlaybackEngine> engine;
@@ -762,8 +765,8 @@ void retakeDiscards()
     finish (*w);
 }
 
-// Griddy records on arm plus play, so the DAW may have recorded no audio: the track is silent on playback and only the
-// host position can place the video. It must still follow play, pause, loop and seek.
+// A take with no audio clip on the track: nothing plays there, so the picture is black while Live plays, and a frame
+// (not black) while it is stopped.
 void silentPlayback()
 {
     auto w = makeWorld (1);
@@ -779,27 +782,20 @@ void silentPlayback()
         { { Event::seek, 0.0, 10.0 }, { Event::play, 0.0 }, { Event::pause, 1.5 }, { Event::play, 2.5 },
           { Event::loopOn, 4.0, 11.0, 13.0 }, { Event::seek, 7.5, 10.5 } }, 10.0, 9.5, 0);
 
-    const auto first = errStats (s, 0.3, 1.5);
-    report ("silent track, first play", first);
-    check (first.n > 0 && first.badFraction == 0.0 && first.p99 < 60.0, "silent track: the take plays from the host position");
+    auto blackFraction = [&] (double from, double to)
+    {
+        int n = 0;
+        const auto black = countIf (s, from, to, [] (const Sample& x) { return x.black; }, &n);
+        return n > 0 ? (double) black / n : 0.0;
+    };
 
+    check (blackFraction (0.3, 1.5) > 0.95, "no audio on the track: black while Live plays");
     std::set<int> counters;
     for (const auto& x : s)
         if (x.t > 1.7 && x.t < 2.4)
             counters.insert (x.counter);
-    check (counters.size() == 1, "silent track: pause holds one frame (" + juce::String ((int) counters.size()) + " distinct)");
-
-    const auto resumed = errStats (s, 2.7, 4.0);
-    report ("silent track, after play again", resumed);
-    check (resumed.badFraction == 0.0 && resumed.p99 < 60.0, "silent track: play again resumes in sync");
-
-    const auto looped = errStats (s, 4.2, 7.4);
-    report ("silent track, through loop wraps", looped);
-    check (looped.badFraction < 0.05 && looped.p99 < 80.0, "silent track: follows the loop");
-
-    const auto sought = errStats (s, 7.7, 9.4);
-    report ("silent track, after a seek", sought);
-    check (sought.badFraction < 0.05 && sought.p99 < 80.0, "silent track: follows a seek");
+    check (blackFraction (1.7, 2.4) == 0.0 && counters.size() == 1, "stopped: one frame, not black");
+    check (blackFraction (2.8, 9.4) > 0.95, "playing again, through loop wraps and a seek: black");
     finish (*w);
 }
 
@@ -950,9 +946,9 @@ void silenceStart()
     const auto s = observe (*w, tl,
         { { Event::seek, 0.0, 9.8 }, { Event::play, 0.0 }, { Event::seek, 6.0, 29.8 } }, 9.8, 12.0, 0);
 
-    const auto silence = errStats (s, 0.4, 1.6);
-    report ("recorded position, during the 1.5 s of silence", silence);
-    check (silence.badFraction == 0.0 && silence.p99 < 45.0, "the host position prior shows the right frames before any sound arrives");
+    int n = 0;
+    const auto black = countIf (s, 0.4, 1.6, [] (const Sample& x) { return x.black; }, &n);
+    check (n > 0 && black == n, "the 1.5 s of digital silence before the sound is black, as no clip plays (" + juce::String (black) + "/" + juce::String (n) + ")");
     const auto rest = errStats (s, 1.9, 5.0);
     report ("recorded position, after sound starts", rest);
     check (rest.badFraction == 0.0, "no wobble when the fingerprint takes over from the prior");
@@ -1146,7 +1142,7 @@ int flips (const std::vector<Sample>& s, double from, double to)
     return changes;
 }
 
-int countIf (const std::vector<Sample>& s, double from, double to, const std::function<bool (const Sample&)>& f, int* total = nullptr)
+int countIf (const std::vector<Sample>& s, double from, double to, const std::function<bool (const Sample&)>& f, int* total)
 {
     int n = 0, hit = 0;
     for (const auto& x : s)
@@ -1333,7 +1329,7 @@ void compEnd()
     finish (*w);
 }
 
-// Take B was silent from 2 to 3 s (the singer rested in that take). The comp plays A, then B from 2 s.
+// Take B is digital silence from 2 to 3 s. The comp plays A, then B from 2 s: no sound means black, then B in sync.
 void compSilentTake()
 {
     auto w = makeWorld (1);
@@ -1353,14 +1349,127 @@ void compSilentTake()
         for (const auto& x : s)
             if (x.black && x.t > 2.2 && x.t < 5.2)
                 say ("   black at t " + juce::String (x.t, 3) + " host " + juce::String (x.host, 3) + " gap " + juce::String ((int) x.gap) + " status " + juce::String ((int) x.status));
-    check (countIf (s, 2.2, 5.2, [] (const Sample& x) { return x.black; }) == 0, "never black where a take's own audio is silent");
-    const auto right = rightFraction (s, 2.5, 3.15);
-    check (right > 0.9, "the silent piece shows the take that was silent there (" + juce::String (right * 100.0, 0) + " percent)");
+    int n = 0;
+    const auto black = countIf (s, 2.4, 3.15, [] (const Sample& x) { return x.black; }, &n);
+    check (n > 0 && black == n, "where the take's clip is digital silence, black like any stretch with no sound (" + juce::String (black) + "/" + juce::String (n) + ")");
     check (rightFraction (s, 3.4, 5.1) > 0.95, "and it carries on in sync when its sound comes back");
     finish (*w);
 }
 
 // A slot no Griddy owns only follows the position: no black, no comps (the leader feeds it silence).
+// Debug only: replays two real recordings as a looped comp. GRIDDY_REPLAY_A and GRIDDY_REPLAY_B name audio.wav files,
+// GRIDDY_REPLAY_CUT where B hands over to A (seconds), GRIDDY_REPLAY_LATENCY_MS how far the host plays clips early.
+std::vector<float> wavAtSR (const char* env)
+{
+    std::vector<float> v;
+    double sr = 0.0;
+    if (const auto* path = std::getenv (env); path == nullptr || ! readWav (juce::File (path), v, sr) || sr <= 0.0)
+        return {};
+    std::vector<float> out ((size_t) ((double) v.size() * SR / sr));
+    for (size_t i = 0; i < out.size(); ++i)
+    {
+        const auto x = (double) i * sr / SR;
+        const auto j = (size_t) x;
+        const auto f = (float) (x - (double) j);
+        out[i] = j + 1 < v.size() ? v[j] * (1.0f - f) + v[j + 1] * f : (j < v.size() ? v[j] : 0.0f);
+    }
+    return out;
+}
+
+void compReplay()
+{
+    auto a = wavAtSR ("GRIDDY_REPLAY_A"), b = wavAtSR ("GRIDDY_REPLAY_B");
+    if (a.empty() || b.empty())
+    {
+        say ("  set GRIDDY_REPLAY_A and GRIDDY_REPLAY_B to two audio.wav files");
+        return;
+    }
+    const auto cut = std::getenv ("GRIDDY_REPLAY_CUT") != nullptr ? std::atof (std::getenv ("GRIDDY_REPLAY_CUT")) : 2.0;
+    const auto latency = std::getenv ("GRIDDY_REPLAY_LATENCY_MS") != nullptr ? std::atof (std::getenv ("GRIDDY_REPLAY_LATENCY_MS")) / 1000.0 : 0.0;
+    const auto loop = 8.0;
+    a.resize ((size_t) (loop * SR) + (size_t) SR, 0.0f);
+
+    auto w = makeWorld (1);
+    auto& A = w->add (recordTake (*w->engine, 0, (double) a.size() / SR - 0.05, a, 10.0));
+    auto& B = w->add (recordTake (*w->engine, 0, std::min ((double) b.size() / SR - 0.05, loop), b, 10.0));
+    keepAndLoad (*w, 0, B);
+
+    Timeline tl (1);
+    tl.clips[0].push_back (Clip::place (B, 10.0, latency, cut));
+    tl.clips[0].push_back (Clip::place (A, 10.0 + cut, cut + latency, loop - cut));
+    const auto s = observe (*w, tl, { { Event::loopOn, 0.0, 10.0, 10.0 + loop }, { Event::seek, 0.0, 10.0 }, { Event::play, 0.0 } }, 10.0, 30.0, 0);
+
+    double sum = 0.0, sum2 = 0.0;
+    int n = 0, steps = 0, prevCounter = -1;
+    for (const auto& x : s)
+    {
+        if (! (x.truth && x.playing && x.shown && x.labelOk))
+            continue;
+        sum += x.errMs; sum2 += x.errMs * x.errMs; ++n;
+        if (prevCounter >= 0 && x.counter < prevCounter && std::fmod (x.host - 10.0, loop) > 0.2)
+            ++steps;
+        prevCounter = x.counter;
+    }
+    const auto mean = n > 0 ? sum / n : 0.0;
+    metric ("replay right", rightFraction (s, 0.5, 30.0, 80.0) * 100.0, "percent");
+    metric ("replay error mean", mean, "ms");
+    metric ("replay error spread", n > 1 ? std::sqrt (std::max (0.0, sum2 / n - mean * mean)) : 0.0, "ms");
+    metric ("replay backward steps", (double) steps, "");
+    finish (*w);
+}
+
+// What Live did on 2026-11-14: Griddy recorded silence (the track did not monitor its input while recording), then the
+// clips played the real sound. A comp of B then A over an 8 s loop, with A deleted from 5 to 6 s.
+void liveSilentTakes()
+{
+    const auto loop = 8.0;
+    const std::vector<float> quiet ((size_t) ((loop + 1.0) * SR), 0.0f);
+    auto w = makeWorld (1);
+    auto& A = w->add (recordTake (*w->engine, 0, loop, quiet, 10.0));
+    auto& B = w->add (recordTake (*w->engine, 0, loop, quiet, 10.0));
+    A.audio = performance (191, loop + 1.0);
+    B.audio = performance (192, loop + 1.0);
+    keepAndLoad (*w, 0, B);
+
+    Timeline tl (1);
+    tl.clips[0].push_back (Clip::place (B, 10.0, 0.0, 2.0));
+    tl.clips[0].push_back (Clip::place (A, 12.0, 2.0, 3.0));
+    tl.clips[0].push_back (Clip::place (A, 16.0, 6.0, 2.0));
+    const auto s = observe (*w, tl, { { Event::loopOn, 0.0, 10.0, 10.0 + loop }, { Event::seek, 0.0, 10.0 }, { Event::play, 0.0 } }, 10.0, 24.5, 0);
+
+    int n = 0, steps = 0, inCut = 0, blackInCut = 0, after = 0, blackAfter = 0, prevCounter = -1;
+    double sum = 0.0, sum2 = 0.0;
+    for (const auto& x : s)
+    {
+        const auto lapT = std::fmod (x.host - 10.0, loop);
+        if (x.playing && x.t > 0.5 && lapT >= 5.2 && lapT < 5.95)
+        {
+            ++inCut;
+            blackInCut += x.black ? 1 : 0;
+        }
+        if (x.playing && x.t > 0.5 && lapT >= 6.1 && lapT < 7.9)
+        {
+            ++after;
+            blackAfter += x.black ? 1 : 0;
+        }
+        if (! (x.truth && x.playing && x.shown && x.labelOk))
+            continue;
+        sum += x.errMs; sum2 += x.errMs * x.errMs; ++n;
+        if (prevCounter >= 0 && x.counter < prevCounter && lapT > 0.2)
+            ++steps;
+        prevCounter = x.counter;
+    }
+    const auto mean = n > 0 ? sum / n : 0.0;
+    metric ("silent takes: right", rightFraction (s, 0.5, 24.5, 80.0) * 100.0, "percent");
+    metric ("silent takes: error spread", n > 1 ? std::sqrt (std::max (0.0, sum2 / n - mean * mean)) : 0.0, "ms");
+    metric ("silent takes: backward steps", (double) steps, "");
+    metric ("silent takes: black in the deleted stretch", inCut > 0 ? 100.0 * blackInCut / inCut : 0.0, "percent");
+    check (inCut > 0 && blackInCut == inCut, "takes recorded without sound: a deleted stretch is black from 150 ms in (" + juce::String (blackInCut) + "/" + juce::String (inCut) + ")");
+    check (after > 0 && blackAfter == 0, "and the video is back from 100 ms after the clip starts again (" + juce::String (blackAfter) + " black of " + juce::String (after) + ")");
+    check (steps == 0, "the picture never steps backwards inside a piece");
+    finish (*w);
+}
+
 // The plugin never offers test patterns: they exist for the harness, the smoke test and CI only.
 void noTestPatterns()
 {
@@ -2134,6 +2243,8 @@ int main (int argc, char** argv)
         { "comp_silent_take", compSilentTake, true },
         { "comp_unowned", compUnowned, true },
         { "no_test_patterns", noTestPatterns, true },
+        { "comp_replay", compReplay, false },
+        { "live_silent_takes", liveSilentTakes, true },
         { "comp_recording_load", compRecordingLoad, true },
         { "comp_bench", compBench, true },
         { "bench", bench, true },

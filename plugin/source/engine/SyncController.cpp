@@ -13,7 +13,6 @@ static constexpr double silenceBeforeHold = 0.25; // seconds of silence, where t
 static constexpr float digitalSilence = 1.0e-5f;  // about -100 dBFS: nothing plays on the track at all
 static constexpr double gapAfter = 0.150;          // seconds of digital silence before a gap goes black
 static constexpr double gapLeave = 0.025;          // seconds of sound that end a gap
-static constexpr double loudReference = 4.0 * silenceLevel; // a take's own audio is clearly not silent above this
 
 const char* TakeChange::pathName (Path p)
 {
@@ -301,7 +300,7 @@ SlotTarget SyncController::update (double wallNow)
         }
     }
 
-    // Digital silence on the track, timed for black gaps and silent pieces.
+    // Digital silence on the track, timed for black gaps.
     if (hs.playing && hs.level < digitalSilence)
     {
         if (digitalSilentSince < 0.0)
@@ -321,60 +320,14 @@ SlotTarget SyncController::update (double wallNow)
     // A gap ends once sound has lasted gapLeave, which is also long enough for comp detection to say whose sound it is.
     const auto stayInGap = inGap && gapsOn && signalSince >= 0.0 && wallNow - signalSince < gapLeave;
 
-    auto covering = [&] (const TakeProfile& t, double& takeSecondsHere) -> bool
-    {
-        for (const auto& r : t.ranges)
-            if (hostNow >= r.hostStart && hostNow < r.hostEnd)
-            {
-                takeSecondsHere = r.takeAtHostStart + (hostNow - r.hostStart);
-                return true;
-            }
-        return false;
-    };
-
-    // A piece that is silent on the track where one take's own audio was silent too: that take is playing (a singer
-    // resting in one take of a comp). Switch to it rather than going black. When the current take is silent here too,
-    // or two takes are, the current choice stays.
-    if (longSilence && ! inGap)
-    {
-        const TakeProfile* currentTake = placement.valid ? lookup (placement.takeId, false) : nullptr;
-        const auto currentQuiet = currentTake != nullptr && envelopeAt (*currentTake, hostNow + placement.offset) <= silenceLevel
-                               && hostNow + placement.offset < currentTake->durationSeconds;
-
-        if (! currentQuiet)
-        {
-            for (const auto& t : localTakes)
-            {
-                double ts = 0.0;
-                if (covering (t, ts) && envelopeAt (t, ts) <= silenceLevel && ts >= 0.0 && ts < t.durationSeconds
-                    && ! (placement.valid && placement.kind == SyncKind::embedded))
-                {
-                    placement.valid = true;
-                    placement.takeId = t.takeId;
-                    placement.offset = ts - hostNow;
-                    placement.kind = placement.kind == SyncKind::none ? SyncKind::hostPosition : placement.kind;
-                    changePath = TakeChange::silence;
-                    break; // the take in review or kept comes first, then the newest archived one
-                }
-            }
-        }
-    }
-
-    bool anyCovers = false;
-    for (const auto& t : localTakes)
-    {
-        double ts = 0.0;
-        anyCovers = anyCovers || covering (t, ts);
-    }
-
     if (! placement.valid)
     {
         out.takeId = active->takeId;
         out.status = hs.playing ? SyncStatus::held : SyncStatus::stopped;
         out.kind = SyncKind::none;
 
-        // Nothing placed yet and nothing was recorded here: no clip plays.
-        const auto gapNow = (longSilence && ! anyCovers) || stayInGap;
+        // Nothing placed yet: digital silence means no clip plays.
+        const auto gapNow = longSilence || stayInGap;
         if (gapNow != inGap)
         {
             inGap = gapNow;
@@ -432,23 +385,11 @@ SlotTarget SyncController::update (double wallNow)
         out.status = SyncStatus::held;
     }
 
-    // Black gaps. Digital silence where no take was recorded, or where the take this slot heard has sound of its own,
-    // means no clip plays: the picture goes black instead of holding a frame. Never for a take whose own audio is
-    // silent there, and never on a placement only the host position made (Griddy recorded with no audio in Live).
+    // Black gaps. A playing clip always has some sound (even a quiet stretch of a recording has its noise floor); no
+    // clip at all is digital silence. So digital silence for gapAfter means no clip plays here: black, whatever take
+    // was placed and however it was placed. The picture comes back once sound has lasted gapLeave.
     {
-        const auto unclamped = hostNow + placement.offset;
-        const auto refQuiet = unclamped >= 0.0 && unclamped < take->durationSeconds && envelopeAt (*take, unclamped) <= silenceLevel;
-
-        const auto heard = placement.kind == SyncKind::fingerprint || placement.kind == SyncKind::embedded;
-        const auto refLoud = heard && unclamped >= 0.0 && unclamped < take->durationSeconds && envelopeAt (*take, unclamped) > loudReference;
-
-        // Silence the take explained does not count: where its own sound comes back, the track lags a block or so.
-        if (refQuiet && digitalSilentSince >= 0.0)
-            takeQuietAt = wallNow;
-        const auto explained = takeQuietAt >= 0.0 && digitalSilentSince >= 0.0 && takeQuietAt >= digitalSilentSince
-                            && wallNow - takeQuietAt < gapAfter;
-
-        const auto gapNow = (longSilence && ! refQuiet && ! explained && (! anyCovers || refLoud)) || stayInGap;
+        const auto gapNow = longSilence || stayInGap;
 
         if (gapNow != inGap)
         {
