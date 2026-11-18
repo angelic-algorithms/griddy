@@ -1470,6 +1470,124 @@ void liveSilentTakes()
     finish (*w);
 }
 
+// A singer: syllables of pitched sound with rests between them, over a microphone's noise floor, so a rest is quiet
+// but never digital silence, as in a real recording.
+std::vector<float> voiceLike (unsigned seed, double seconds)
+{
+    auto v = makeMusic (SR, seconds, seed);
+    std::mt19937 rng (seed * 7u + 3u);
+    std::normal_distribution<float> nd (0.0f, 1.0f);
+    size_t pos = 0;
+    bool on = true;
+    while (pos < v.size())
+    {
+        const auto len = (size_t) (SR * (on ? 0.15 + 0.3 * (double) (rng() % 100) / 100.0 : 0.05 + 0.25 * (double) (rng() % 100) / 100.0));
+        for (size_t i = pos; i < std::min (v.size(), pos + len); ++i)
+            v[i] = (on ? v[i] : 0.0f) + 0.0005f * nd (rng);
+        pos += len;
+        on = ! on;
+    }
+    return v;
+}
+
+// The comp you make in Live, looped for a minute: B, then A from 2 s, nothing from 5 to 6 s (deleted), then B from 6 s,
+// over an 8 s loop. Each piece shows its own take in sync, every cut switches quickly, the deleted stretch is black,
+// and inside a piece the picture moves forward a frame at a time: no stalls, jumps or steps back.
+void compLoopSmooth()
+{
+    const auto loop = 8.0;
+    auto w = makeWorld (1);
+    auto& A = w->add (recordTake (*w->engine, 0, loop, voiceLike (201, loop + 0.5), 10.0));
+    auto& B = w->add (recordTake (*w->engine, 0, loop, voiceLike (202, loop + 0.5), 10.0));
+    keepAndLoad (*w, 0, B);
+
+    Timeline tl (1);
+    tl.clips[0].push_back (Clip::place (B, 10.0, 0.0, 2.0));
+    tl.clips[0].push_back (Clip::place (A, 12.0, 2.0, 3.0));
+    tl.clips[0].push_back (Clip::place (B, 16.0, 6.0, 2.0));
+    const auto seconds = std::getenv ("GRIDDY_SMOOTH_SECONDS") != nullptr ? std::atof (std::getenv ("GRIDDY_SMOOTH_SECONDS")) : 60.0;
+    const auto s = observe (*w, tl, { { Event::loopOn, 0.0, 10.0, 10.0 + loop }, { Event::seek, 0.0, 10.0 }, { Event::play, 0.0 } }, 10.0, seconds, 0);
+
+    auto lapOf = [&] (const Sample& x) { return std::fmod (x.host - 10.0, loop); };
+    auto settled = [&] (double lapT) { return (lapT > 0.25 && lapT < 2.0) || (lapT > 2.25 && lapT < 5.0) || (lapT > 6.25 && lapT < 7.95); };
+
+    int n = 0, good = 0, inCut = 0, blackInCut = 0, back = 0, jumps = 0, compSwitches = 0, otherSwitches = 0;
+    double sum = 0.0, sum2 = 0.0;
+    const Sample* prev = nullptr;
+    std::vector<double> switchTimes;
+    for (size_t i = 0; i < s.size(); ++i)
+    {
+        const auto& x = s[i];
+        if (! x.playing || x.t < 0.5)
+        {
+            prev = nullptr;
+            continue;
+        }
+        const auto lapT = lapOf (x);
+        if (lapT >= 5.2 && lapT < 5.95)
+        {
+            ++inCut;
+            blackInCut += x.black ? 1 : 0;
+        }
+        if (settled (lapT) && x.truth)
+        {
+            ++n;
+            good += x.labelOk && std::abs (x.errMs) < 80.0 ? 1 : 0;
+            if (x.labelOk)
+            {
+                sum += x.errMs;
+                sum2 += x.errMs * x.errMs;
+            }
+            if (prev != nullptr && prev->shown && x.shown && prev->label == x.label && settled (lapOf (*prev)) && lapOf (*prev) < lapT)
+            {
+                back += x.counter < prev->counter ? 1 : 0;
+                jumps += x.counter > prev->counter + 2 ? 1 : 0;
+            }
+            prev = &x;
+        }
+        else
+        {
+            prev = nullptr;
+        }
+    }
+
+    // How long each cut takes to show the new take, lap by lap.
+    for (int lap = 0; lap * loop + 2.0 < seconds - 0.5; ++lap)
+        for (const auto& [cut, label] : { std::pair<double, int> { 2.0, A.label() }, std::pair<double, int> { 6.0, B.label() } })
+        {
+            const auto t = lap * loop + cut;
+            if (t + 0.5 < seconds && t > 0.5)
+                switchTimes.push_back (switchTime (s, t, label));
+        }
+
+    TakeChange c;
+    while (w->engine->popTakeChange (0, c))
+        if (c.path == TakeChange::aligned)
+            ++compSwitches;
+        else if (c.path != TakeChange::gapStart && c.path != TakeChange::gapEnd)
+            ++otherSwitches;
+
+    std::sort (switchTimes.begin(), switchTimes.end());
+    const auto worstSwitch = switchTimes.empty() ? -1.0 : switchTimes.back();
+    const auto medianSwitch = switchTimes.empty() ? -1.0 : switchTimes[switchTimes.size() / 2];
+    const auto right = n > 0 ? (double) good / n : 0.0;
+    const auto mean = n > 0 ? sum / n : 0.0;
+    const auto spread = n > 1 ? std::sqrt (std::max (0.0, sum2 / n - mean * mean)) : 0.0;
+    metric ("smooth comp: right take in sync away from cuts", right * 100.0, "percent");
+    metric ("smooth comp: switch at a cut, median", medianSwitch * 1000.0, "ms");
+    metric ("smooth comp: switch at a cut, worst", worstSwitch * 1000.0, "ms");
+    metric ("smooth comp: sync error spread", spread, "ms");
+    metric ("smooth comp: take changes by comp detection", compSwitches, "");
+    metric ("smooth comp: take changes by another path", otherSwitches, "");
+
+    check (right > 0.95, "a looped comp shows the right take in sync away from cuts (" + juce::String (right * 100.0, 1) + " percent)");
+    check (medianSwitch >= 0.0 && medianSwitch < 0.2 && worstSwitch < 0.35, "each cut shows the new take quickly (median " + juce::String (medianSwitch * 1000.0, 0) + " ms, worst " + juce::String (worstSwitch * 1000.0, 0) + " ms)");
+    check (inCut > 0 && blackInCut == inCut, "the deleted stretch is black every lap (" + juce::String (blackInCut) + "/" + juce::String (inCut) + ")");
+    check (back == 0 && jumps == 0, "inside a piece the picture never steps back or skips frames (" + juce::String (back) + " back, " + juce::String (jumps) + " skips)");
+    check (compSwitches > 0 && otherSwitches <= 1, "cuts are found by comp detection (" + juce::String (compSwitches) + " comp, " + juce::String (otherSwitches) + " other)");
+    finish (*w);
+}
+
 // The plugin never offers test patterns: they exist for the harness, the smoke test and CI only.
 void noTestPatterns()
 {
@@ -2245,6 +2363,7 @@ int main (int argc, char** argv)
         { "no_test_patterns", noTestPatterns, true },
         { "comp_replay", compReplay, false },
         { "live_silent_takes", liveSilentTakes, true },
+        { "comp_loop_smooth", compLoopSmooth, true },
         { "comp_recording_load", compRecordingLoad, true },
         { "comp_bench", compBench, true },
         { "bench", bench, true },
