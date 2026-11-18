@@ -91,6 +91,51 @@ reports. When the script does not report one (an older script), the take starts 
 | Record again straight after, before or after Keep | a new recording | a new take; the one in review is replaced as before |
 | Live's Session record | records a Session clip | a take, from when Griddy hears (Session clips are not in the arrangement file) |
 
+## Filming video for a recording that is already there
+
+For laying down a part one piece at a time: record the kick, then the snare, and so on, and film each one later while
+Live plays it back. A film take becomes the picture of that recording, wherever its clips are used. It needs the Live
+script.
+
+**Choosing the recording.** Click an audio clip on a Griddy track in Live, on the main lane or a take lane. That
+track's Griddy shows "Film for: <track>, bar N" (with "take lane" for a lane clip) and lights its Film button. The
+Slot tab also lists every recording on the track, one row per recorded file, marked "video" when a take shows for it,
+"filmed" when that take is a film take, and "no video" otherwise, each with its own Film button.
+
+**Filming.** Pressing Film asks Live, through `live-requests.json`, to play from one bar before the clip and to stop
+at the clip's end. If Live's record button is on, it is switched off first, and if the track is armed in Live, it is
+disarmed, so Live plays the clip and records nothing. Griddy films from when Live plays until Live stops. Pressing
+Film again (it reads "■ Stop film" while filming) stops Live early. If Live starts recording during filming, the film
+take ends and recording works as above.
+
+**Take lanes.** Live plays a take lane only while it is auditioned (T on the lane), and the script cannot switch that.
+For a lane clip, Griddy says "Audition this lane (T) to hear it". The film lines up by position either way.
+
+**Lining up.** The take stores which file it was filmed against (path, creation time, length) and where in that file
+it starts (`filmedFor` in take.json). Every clip of that file then shows the film take at the matching place, to the
+sample, by path. The output latency the host reports is taken off, since you play along to what comes out of the
+speakers. The rest is the slip control, as for any take.
+
+**Several videos for one file.** The newest kept or reviewed film take of a file is its video; older ones stay in
+history and can be restored. Where the film does not cover the file (filmed only part of it), the video the file had
+before shows, the take recorded with it, or black where there was none.
+
+| Case | Before | During | After |
+|---|---|---|---|
+| Click a clip on a Griddy track | | "Film for: …", Film lit | |
+| Click a clip on another track, or none | Film for the last clip | Film hidden | |
+| Film, Live stopped | camera | Live plays from a bar before the clip; camera, red ring, "● FILM" | Live stops at the clip's end; the film take in review |
+| Film on an armed track, or with Live's record on | | Live disarms the track and switches record off, then plays | as above |
+| Stop film early | | Live stops | the film take in review, covering what was filmed |
+| Keep | review | | every clip of the file shows the film take |
+| Retake | review | | the file's video before |
+| Film the same file again | the kept film take | | the new one in review, then kept; the old one in history |
+| Live records during filming | filming | the film take ends; a normal take starts if the track is armed | |
+| A lane clip | | "Audition this lane (T) to hear it" | |
+| No Live script | | no Film button | |
+| Move, cut, duplicate or comp the clip | | | the film take follows, as any take |
+| A clip that loops past its loop end | | | placed by sound, as any take |
+
 ## Arm out of step and no take, seen in Live on 18 November, and why
 
 From griddy.log, Live's Log.txt and the two shared files, for the set made from the "Griddy 9 Track Master" template:

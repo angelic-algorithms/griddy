@@ -81,6 +81,7 @@ class Clip(object):
     def __init__(self, start, end, path, marker=0.0, muted=False, gain=0.5, warping=True, looping=False, loop_end=1000.0):
         self.is_audio_clip, self.start_time, self.end_time, self.file_path = True, start, end, path
         self.start_marker, self.muted, self.gain, self.warping, self.looping, self.loop_end = marker, muted, gain, warping, looping, loop_end
+        self._live_ptr = id(self)  # what Live's objects carry to say which object in Live they wrap
 
 
 class TakeLane(object):
@@ -93,6 +94,8 @@ class Song(Listenable):
         Listenable.__init__(self)
         self.tracks, self.record_mode, self.session_record, self.is_playing, self.tempo = tracks, False, False, False, 120.0
         self.current_song_time, self.punch_in, self.loop_start = 0.0, False, 0.0
+        self.signature_numerator, self.signature_denominator = 4, 4
+        self.view = types.SimpleNamespace(detail_clip=None)
 
     def __setattr__(self, k, v):
         object.__setattr__(self, k, v)
@@ -101,6 +104,12 @@ class Song(Listenable):
 
     def start_playing(self):
         self.is_playing = True
+
+    def continue_playing(self):
+        self.is_playing = True
+
+    def stop_playing(self):
+        self.is_playing = False
 
 
 class SongWrapper(object):
@@ -172,11 +181,13 @@ request_id = [1000]
 written_requests = []
 
 
-def press(action, slot=1, track="Vocals", age=0.0):
+def press(action, slot=1, track="Vocals", age=0.0, **extra):
     """Griddy's REC or Arm, as the plugin writes it; the script does it on its next display tick."""
     import time
     request_id[0] += 1
-    written_requests.append({"id": request_id[0], "slot": slot, "track": track, "action": action, "at": time.time() - age})
+    r = {"id": request_id[0], "slot": slot, "track": track, "action": action, "at": time.time() - age}
+    r.update(extra)
+    written_requests.append(r)
     folder = os.path.dirname(link.REQUESTS_PATH)
     if not os.path.isdir(folder):
         os.makedirs(folder)
@@ -375,6 +386,58 @@ check(arm.value == 1.0, "Record arm out of step with Live is put right on the ne
 object.__setattr__(song, "record_mode", False)
 surface.update_display()
 check(arm.value == 0.0, "and so is a record off Live did not announce")
+
+# Film: a video for a recording that is already there.
+song.set("record_mode", False)
+song.set("is_playing", False)
+song.current_song_time = 0.0
+vocals.take_lanes = [TakeLane([Clip(8.0, 24.0, "/takes/b.wav")])]
+lane_clip = vocals.take_lanes[0].arrangement_clips[0]
+data, tracks = written_tracks()
+check(tracks["Vocals"]["files"] == ["/takes/a.wav", "/takes/b.wav"], "the arrangement file gives each file number's path")
+check(not any(c.get("selected") for c in tracks["Vocals"]["clips"]), "no clip clicked: none is marked")
+song.view.detail_clip = SongWrapper(vocals.arrangement_clips[1])  # Live hands out a new object for the same clip
+data, tracks = written_tracks()
+marked = [c for c in tracks["Vocals"]["clips"] if c.get("selected")]
+check(len(marked) == 1 and marked[0]["start"] == 6.0 and marked[0]["bar"] == 4, "the clip clicked in Live is marked, with its bar")
+song.view.detail_clip = lane_clip
+data, tracks = written_tracks()
+marked = [c for c in tracks["Vocals"]["clips"] if c.get("selected")]
+check(len(marked) == 1 and marked[0].get("lane"), "a clicked take lane clip is marked too")
+
+vocals.set("arm", True)
+song.set("record_mode", True)
+run_scheduled()
+press("film", **{"from": 6.0, "to": 7.0})
+check(not song.record_mode and not vocals.arm, "Film switches Live's record off and disarms the track, so nothing records")
+check(song.is_playing and song.current_song_time == 8.0, "and plays from a bar before the clip (beat 12 less 4)")
+check(arm.value == 0.0, "Griddy's Record arm stays off while filming")
+song.current_song_time = 13.0
+surface.update_display()
+check(song.is_playing, "Live plays on inside the clip")
+song.current_song_time = 14.0
+surface.update_display()
+check(not song.is_playing, "and stops at the clip's end")
+song.current_song_time = 0.0
+surface.update_display()
+check(not song.is_playing, "filming has ended: the script does not play again")
+
+song.current_song_time = 30.0
+song.set("is_playing", True)
+press("film", **{"from": 6.0, "to": 7.0})
+check(song.is_playing and song.current_song_time == 8.0, "Film while Live plays jumps to a bar before the clip")
+press("filmstop")
+check(not song.is_playing, "Stop film stops Live early")
+song.set("is_playing", True)
+press("filmstop")
+check(song.is_playing, "a Stop film after filming ended does nothing")
+song.set("is_playing", False)
+song.signature_numerator = 3
+press("film", **{"from": 6.0, "to": 7.0})
+check(song.current_song_time == 9.0, "a bar before the clip follows the time signature")
+song.set("is_playing", False)
+surface.update_display()
+song.signature_numerator = 4
 
 surface.disconnect()
 check(not os.path.exists(link.TIMELINE_PATH), "disconnecting removes the arrangement file, so Griddy follows the sound again")

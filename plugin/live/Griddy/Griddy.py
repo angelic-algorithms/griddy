@@ -23,6 +23,11 @@
 # second and whenever it changes; Griddy reads it to go black exactly where no clip plays and to switch takes on the
 # frame of a cut, and takes it as the sign that this script runs. Without the file, Griddy still works it out from the
 # sound, a little later, and its REC arms Griddy itself.
+#
+# Film: Griddy can film a video for a recording that is already there. The file says which recorded file each clip
+# plays (by path) and which clip you clicked in Live. Griddy's Film button asks, through the requests file, to play from
+# a bar before that clip to its end without recording: the script switches Live's record off and disarms the track
+# first, so Live plays the clip and records nothing, and stops Live at the clip's end.
 
 import json
 import os
@@ -41,6 +46,21 @@ TIMELINE_PATH = os.path.expanduser("~/Library/Application Support/Griddy/live-ti
 TIMELINE_EVERY = 1.0  # seconds: rewritten this often even unchanged, so Griddy can tell the script still runs
 REQUESTS_PATH = os.path.join(os.path.dirname(TIMELINE_PATH), "live-requests.json")
 REQUEST_MAX_AGE = 3.0  # seconds: an older press is dropped, so starting Live never replays one
+
+
+def same(a, b):
+    """Whether two of Live's objects are one: Live hands out a new Python object each time, so "is" never says."""
+    if a is None or b is None:
+        return False
+    if a is b:
+        return True
+    pa, pb = getattr(a, "_live_ptr", None), getattr(b, "_live_ptr", None)
+    if pa is not None and pb is not None:
+        return pa == pb
+    try:
+        return a == b
+    except Exception:
+        return False
 
 
 def griddy_arm(device):
@@ -107,6 +127,8 @@ class Griddy(ControlSurface):
         self._armed_from = {}     # track name -> beat where it was armed while Live recorded
         self._was_recording = False
         self._last_arm = {}       # track name -> arm last seen, to log changes made in Live
+        self._film_until = None   # while Griddy films: the beat where Live stops, the end of the clip filmed
+        self._film_started = False
         with self.component_guard():
             song = self.song()
             # Kept for the script's whole life. (They used to be dropped at every rebuild: Live hands out a new song
@@ -315,6 +337,49 @@ class Griddy(ControlSurface):
                 song.record_mode = False
                 song.session_record = False
                 self.log_message("Griddy: REC off on %s, so Live stops recording" % track.name)
+            elif action == "film":
+                self._film(song, track, request)
+            elif action == "filmstop" and self._film_until is not None:
+                self._film_until = None
+                song.stop_playing()
+                self.log_message("Griddy: Stop film on %s, so Live stops" % track.name)
+
+    def _film(self, song, track, request):
+        """Play the clip to film, from a bar before it to its end, recording nothing."""
+        seconds_per_beat = 60.0 / song.tempo
+        start = float(request.get("from", 0.0)) / seconds_per_beat
+        end = float(request.get("to", 0.0)) / seconds_per_beat
+        if end <= start:
+            self.log_message("Griddy: Film on %s asked for no clip" % track.name)
+            return
+        if song.record_mode or song.session_record:
+            song.record_mode = False
+            song.session_record = False
+            self.log_message("Griddy: Film on %s, so Live's record is switched off first" % track.name)
+        if track.arm:
+            track.arm = False
+            self.log_message("Griddy: Film on %s, so Live disarms it and plays its clips" % track.name)
+        beats_per_bar = 4.0 * getattr(song, "signature_numerator", 4) / float(getattr(song, "signature_denominator", 4))
+        song.current_song_time = max(0.0, start - beats_per_bar)  # playing, this jumps there
+        if not song.is_playing:
+            song.continue_playing()  # from the playhead just set; start_playing would go from the start marker
+        self._film_until = end
+        self._film_started = False
+        self.log_message("Griddy: Film on %s, so Live plays beats %.3f to %.3f" % (track.name, song.current_song_time, end))
+
+    def _check_film(self):
+        """While filming: stop Live at the end of the clip. Stopping Live in any other way ends filming too."""
+        if self._film_until is None:
+            return
+        song = self.song()
+        if song.is_playing:
+            self._film_started = True
+            if song.current_song_time >= self._film_until:
+                self._film_until = None
+                song.stop_playing()
+                self.log_message("Griddy: the clip filmed has ended, so Live stops")
+        elif self._film_started:
+            self._film_until = None
 
     # The arrangement -------------------------------------------------------------------------------------------
 
@@ -324,6 +389,10 @@ class Griddy(ControlSurface):
             self._do_requests()
         except Exception as e:
             self.log_message("Griddy: could not do a request from Griddy: %s" % e)
+        try:
+            self._check_film()
+        except Exception as e:
+            self.log_message("Griddy: could not stop Live after filming: %s" % e)
         try:
             # Every tick, not only on Live's notifications: a missed one can no longer leave Griddy out of step.
             self._sync()
@@ -348,6 +417,10 @@ class Griddy(ControlSurface):
     def _track_timeline(self, track, params, seconds_per_beat):
         files = {}
         clips = []
+        song = self.song()
+        view = getattr(song, "view", None)
+        chosen = getattr(view, "detail_clip", None) if view is not None else None
+        beats_per_bar = 4.0 * getattr(song, "signature_numerator", 4) / float(getattr(song, "signature_denominator", 4))
 
         def add(clip, lane):
             if not getattr(clip, "is_audio_clip", False):
@@ -366,6 +439,9 @@ class Griddy(ControlSurface):
                 entry["origin"] = origin
             if lane:
                 entry["lane"] = True
+            if same(clip, chosen):
+                entry["selected"] = True  # the clip you clicked in Live: Griddy's Film films for its recording
+                entry["bar"] = int(clip.start_time // beats_per_bar) + 1
             clips.append(entry)
 
         for clip in getattr(track, "arrangement_clips", []):
@@ -382,8 +458,8 @@ class Griddy(ControlSurface):
             "audible": not (track.mute or getattr(track, "muted_via_solo", False)),
             "arrangement": getattr(track, "playing_slot_index", -1) < 0,
             "clips": clips,
+            "files": [p for p, _ in sorted(files.items(), key=lambda kv: kv[1])],  # each file number's path
         }
-        song = self.song()
         if track.arm and song.record_mode and self._record_from is not None:
             # Where this track's recording begins, so Griddy's take starts there too, not when Griddy hears of it.
             entry["recordFrom"] = max(self._record_from, self._armed_from.get(track.name, self._record_from))
