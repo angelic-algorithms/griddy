@@ -7,6 +7,14 @@
 namespace griddy
 {
 
+// A take whose recording heard no sound: in Live, the track's Monitor was off, so devices got silence while recording.
+// Griddy cannot tell such a take apart from the others in a comp.
+static bool heardNothing (const TakeMeta& m)
+{
+    return std::all_of (m.envelope.begin(), m.envelope.end(), [] (float v) { return v < 1.0e-4f; });
+}
+
+
 static int readInt (const std::atomic<float>* p, int fallback)
 {
     return p != nullptr ? (int) std::lround (p->load()) : fallback;
@@ -1121,6 +1129,9 @@ void Hub::finishTake (int slot)
              + juce::String (entry->meta.durationSeconds, 2) + " s of audio, " + juce::String (entry->meta.numFrames) + " frames from "
              + juce::String (ft.empty() ? 0.0 : ft.front(), 2) + " to " + juce::String (ft.empty() ? 0.0 : ft.back(), 2) + " s, "
              + juce::String ((juce::int64) r->framesDropped()) + " dropped");
+        if (heardNothing (entry->meta))
+            log ("slot " + juce::String (slot + 1) + ": take " + juce::String (entry->meta.takeId)
+                 + " recorded no sound. Live sent this track silence while recording: set its Monitor to Auto or In");
         droppedFrames[(size_t) slot] += r->framesDropped();
         droppedAudio[(size_t) slot] += r->audioDropped();
         slotRecording[(size_t) slot] = false;
@@ -1455,6 +1466,7 @@ juce::var Hub::takesToVar (int slot) const
         o->setProperty ("latencyMs", (e.meta.audioLatencySeconds - e.meta.cameraLatencySeconds) * 1000.0);
         o->setProperty ("hasMov", e.folder.getChildFile ("take.mov").existsAsFile());
         o->setProperty ("heard", e.meta.trackName);
+        o->setProperty ("noSound", heardNothing (e.meta));
         list.add (juce::var (o.release()));
     }
 

@@ -4,7 +4,7 @@
 import { TEMPLATES } from "./kit";
 
 type Listener = (payload: unknown) => void;
-type Take = { id: number; state: "kept" | "review" | "archived"; seconds: number; slip: number; hasMov: boolean; startPpq: number; bpm: number; timeSig: string; fps: number; latencyMs: number; recognised?: boolean; heard?: string };
+type Take = { id: number; state: "kept" | "review" | "archived"; seconds: number; slip: number; hasMov: boolean; startPpq: number; bpm: number; timeSig: string; fps: number; latencyMs: number; recognised?: boolean; heard?: string; noSound?: boolean };
 type MockSlot = { claimed: boolean; name: string; armed: boolean; recording: boolean; recordStartPpq: number; takes: Take[]; playingTake?: number; gap?: boolean };
 type ExportState = "idle" | "waiting" | "recording" | "writing" | "done" | "failed";
 type Store<T> = { get: () => T; set: (v: T) => void; subscribe: (fn: () => void) => () => void };
@@ -244,7 +244,7 @@ export function createMock() {
         } else {
           // mixed: my slot has a take in review over a kept one, slot 2 kept, slot 3 armed and live, slot 4 free.
           claim(0, { takes: [take(3, "review", 0, 8), take(2, "kept", 0, 8, 0.02), take(1, "archived", 0)] });
-          claim(1, { takes: [take(4, "kept", 0)] });
+          claim(1, { takes: [{ ...take(4, "kept", 0), noSound: true }] });
           claim(2, { armed: true });
         }
     }

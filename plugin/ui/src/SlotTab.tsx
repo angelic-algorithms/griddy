@@ -66,6 +66,7 @@ function TakeRow({ slot, take, playing, track, onKeep, onRetake }: { slot: numbe
         </span>
       </div>
       {take.recognised === false && <span className="small-note">Too old to follow comps</span>}
+      {take.noSound && <span className="error-line" role="note">No sound recorded. Live sent this track silence while recording, so this take can't be told apart in a comp. Set the track's Monitor to Auto or In.</span>}
       {!!take.heard && take.heard !== track && <span className="small-note">This take listened to {take.heard}. It follows edits on that track.</span>}
       <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
         {take.state === "review" && (

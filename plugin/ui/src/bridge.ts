@@ -58,6 +58,8 @@ export type TakeInfo = {
   recognised?: boolean;
   /** The track whose audio the take listened to, when the host named it. */
   heard?: string;
+  /** The take recorded no sound (Live's Monitor was off), so it cannot be told apart in a comp. */
+  noSound?: boolean;
 };
 
 export type SlotInfo = {
