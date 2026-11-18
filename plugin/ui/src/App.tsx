@@ -120,7 +120,7 @@ export function App() {
     const onKey = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement | null)?.tagName;
       if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA" || e.metaKey || e.ctrlKey || e.altKey) return;
-      if ((e.key === "r" || e.key === "R") && !master && engine) params.recordArm.set(!params.recordArm.get());
+      if ((e.key === "r" || e.key === "R") && !master && engine) pressRec();
       if ((e.key === "k" || e.key === "K") && view?.review) void keep(sel);
     };
     window.addEventListener("keydown", onKey);
@@ -129,6 +129,59 @@ export function App() {
 
   const ownView = own >= 0 ? views[own] : undefined;
   const isRec = !!ownView && (ownView.recording || ownView.waiting);
+  const liveScript = !!engine?.liveScript;
+  const liveArmed = !!ownView?.info?.liveArmed;
+
+  // With the Live script, REC and Arm ask Live, which answers a tenth of a second or so later. Until it does, each
+  // button shows what was asked for; if Live has not followed after 1.5 s, it goes back and says so.
+  const [asked, setAsked] = useState<{ arm?: boolean; rec?: boolean; at: number }>({ at: 0 });
+  const askedArm = asked.arm !== undefined && asked.arm !== liveArmed ? asked.arm : undefined;
+  const askedRec = asked.rec !== undefined && asked.rec !== (isRec || armed) ? asked.rec : undefined;
+  // Once Live has followed, forget the press, so a later change made in Live itself shows at once.
+  useEffect(() => {
+    if (asked.at && askedArm === undefined && askedRec === undefined) setAsked({ at: 0 });
+  }, [asked.at, askedArm, askedRec]);
+  useEffect(() => {
+    if (askedArm === undefined && askedRec === undefined) return;
+    const t = setTimeout(() => {
+      setAsked({ at: 0 });
+      say(askedArm !== undefined
+        ? `Live didn't ${askedArm ? "arm" : "disarm"} the track. Check that Griddy is still the Control Surface in Live's settings.`
+        : `Live didn't ${askedRec ? "start" : "stop"} recording.`);
+    }, 1500);
+    return () => clearTimeout(t);
+  }, [asked.at, askedArm, askedRec]);
+
+  const ask = async (action: "record" | "stop" | "arm" | "disarm") => {
+    if (!(await api.requestInLive(action))) {
+      say("Griddy can't reach Live. Set Control Surface to Griddy in Live's settings.");
+      return;
+    }
+    const at = Date.now();
+    setAsked(action === "arm" || action === "disarm" ? { arm: action === "arm", at } : { rec: action === "record", at });
+  };
+
+  const recDown = askedRec ?? (isRec || (liveScript && armed));
+  const armDown = askedArm ?? liveArmed;
+  const pressRec = () => {
+    if (!liveScript) params.recordArm.set(!params.recordArm.get());
+    else if (recDown) void ask("stop");
+    else if (!armDown) say("Arm the track first: press Arm, or arm it in Live.");
+    else void ask("record");
+  };
+  const pressArm = () => void ask(armDown ? "disarm" : "arm");
+
+  // The hint can be true for one status update between Live's record and play; show it only once it holds.
+  const hint = engine?.recordHint ?? "";
+  const [shownHint, setShownHint] = useState("");
+  useEffect(() => {
+    if (!hint) {
+      setShownHint("");
+      return;
+    }
+    const t = setTimeout(() => setShownHint(hint), 500);
+    return () => clearTimeout(t);
+  }, [hint]);
   const latency = view?.shown?.latencyMs;
   const showLoop = !!transport.hasLoop;
 
@@ -145,10 +198,22 @@ export function App() {
           <Btn color={transport.playing ? "lime" : "bone"} disabled pressed={transport.playing} label="Playing in Live" title="Use Live's transport">
             {transport.playing ? "❚❚" : "▶"}
           </Btn>
-          {!master && engine && (
-            <Btn color="blood" onClick={() => params.recordArm.set(!armed)} pressed={armed} className={isRec ? "rec-pulse" : ""}
+          {!master && engine && liveScript && (
+            <Btn color={armDown ? "hot" : "bone"} onClick={pressArm} pressed={armDown}
+              title={armDown ? `Disarm ${ownView?.name ?? "this track"} in Live` : `Arm ${ownView?.name ?? "this track"} in Live, so Rec can record it`}>
+              {armDown ? "Armed" : "Arm"}
+            </Btn>
+          )}
+          {!master && engine && !liveScript && (
+            <Btn color="blood" onClick={pressRec} pressed={armed} className={isRec ? "rec-pulse" : ""}
               title={`Arm slot ${own + 1}. The next play records one take. (R)`}>
               {isRec ? "● Stop rec" : "● Rec"}
+            </Btn>
+          )}
+          {!master && engine && liveScript && (
+            <Btn color="blood" onClick={pressRec} pressed={recDown} className={`${recDown ? "rec-pulse" : ""} ${!armDown && !recDown ? "btn-dim" : ""}`}
+              title={recDown ? "Stop recording in Live (R)" : armDown ? "Record in Live, and play if Live is stopped (R)" : "Arm the track first"}>
+              {recDown ? "● Stop rec" : "● Rec"}
             </Btn>
           )}
           {showLoop && (
@@ -181,7 +246,7 @@ export function App() {
             </div>
           )}
           <div className="chips-row">
-            {!!engine?.recordHint && <span className="chip-dark" role="status">{engine.recordHint}</span>}
+            {!!shownHint && <span className="chip-dark" role="status">{shownHint}</span>}
             {latency !== undefined && Math.round(latency) !== 0 && (
               <span className="chip-dark" title="The camera's delay Griddy took off this take, before your slip">
                 Latency comp auto · {latency < 0 ? "−" : "+"}{Math.abs(latency).toFixed(1)} ms

@@ -122,6 +122,8 @@ export type EngineStatus = {
   recordHint?: string;
   pendingFolder?: string;
   hostRecording?: boolean;
+  /** The Live script runs: Live owns this track's arm, and REC and Arm ask Live through requestInLive. */
+  liveScript?: boolean;
   claimedMask?: number;
   master: boolean;
   error: string;
@@ -171,6 +173,8 @@ export const api = {
   getStatus: native<Status>("getStatus"),
   revealOutputFolder: native<boolean>("revealOutputFolder"),
   chooseOutputFolder: native<string>("chooseOutputFolder"),
+  /** A press of REC or Arm, for the Live script to do in Live. False when the script does not run. */
+  requestInLive: native<boolean>("requestInLive") as (action: "record" | "stop" | "arm" | "disarm") => Promise<boolean>,
   keepTake: native<boolean>("keepTake") as (slot: number, id: number) => Promise<boolean>,
   retakeTake: native<boolean>("retakeTake") as (slot: number, id: number) => Promise<boolean>,
   restoreTake: native<boolean>("restoreTake") as (slot: number, id: number) => Promise<boolean>,

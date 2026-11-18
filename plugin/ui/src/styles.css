@@ -34,6 +34,7 @@ button{font-family:inherit}
 .btn:active:not(:disabled){transform:skewX(-8deg) translate(2px,2px);box-shadow:1px 1px 0 #000}
 .btn:focus-visible,.nudge:focus-visible,.tile:focus-visible{outline:3px solid #fff;outline-offset:2px}
 .btn:disabled{opacity:.4;cursor:not-allowed}
+.btn-dim{opacity:.45}
 .nudge{color:var(--sky);font-size:13px;padding:2px 6px;cursor:pointer;background:transparent;border:0}
 .nudge:hover{color:#fff}
 .hatch{background:repeating-linear-gradient(45deg,#17171b 0 10px,#202027 10px 20px)}

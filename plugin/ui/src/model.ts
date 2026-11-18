@@ -43,9 +43,12 @@ export function slotViews(engine: EngineStatus | undefined, transport: Transport
     const kept = takes.find((t) => t.state === "kept");
     const recording = !!info?.recording;
     const armed = slot === own ? engine.armed : !!info?.armed;
-    // Griddy's own arm is on only while Live records, so Live's arm also counts for showing the camera.
+    // The same rule as the picture (Hub::renderCanvas): recording, or armed for a new take with none in review. Griddy's
+    // own arm is on only while Live records; a track armed in Live shows the camera while Live is stopped, and while
+    // Live plays only when it has no take to play, as Live's auto monitoring plays the clips.
     const camera = info?.camera !== false;
-    const live = camera && (recording || ((armed || !!info?.liveArmed) && !review));
+    const liveArmed = !!info?.liveArmed && (!transport.playing || !kept);
+    const live = camera && (recording || (!review && (armed || liveArmed)));
     const waiting = armed && !recording && transport.ppq < 0;
     const claimed = slot === own || !!info?.claimed;
     const playing = transport.playing && !live && (review || kept) && info

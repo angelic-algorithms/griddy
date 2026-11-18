@@ -5,7 +5,7 @@ import { TEMPLATES } from "./kit";
 
 type Listener = (payload: unknown) => void;
 type Take = { id: number; state: "kept" | "review" | "archived"; seconds: number; slip: number; hasMov: boolean; startPpq: number; bpm: number; timeSig: string; fps: number; latencyMs: number; recognised?: boolean; heard?: string; noSound?: boolean };
-type MockSlot = { claimed: boolean; name: string; armed: boolean; recording: boolean; recordStartPpq: number; takes: Take[]; playingTake?: number; gap?: boolean };
+type MockSlot = { claimed: boolean; name: string; armed: boolean; liveArmed?: boolean; recording: boolean; recordStartPpq: number; takes: Take[]; playingTake?: number; gap?: boolean };
 type ExportState = "idle" | "waiting" | "recording" | "writing" | "done" | "failed";
 type Store<T> = { get: () => T; set: (v: T) => void; subscribe: (fn: () => void) => () => void };
 
@@ -39,6 +39,8 @@ export const MOCK_SCENARIOS: MockScenario[] = [
   { id: "armed-stopped", label: "Armed, Live stopped" },
   { id: "armed-playing", label: "Armed, Live playing" },
   { id: "armed-recording", label: "Armed, Live recording" },
+  { id: "not-armed", label: "Track not armed in Live" },
+  { id: "no-script", label: "No Live script" },
   { id: "countin", label: "Count in" },
   { id: "disarmed", label: "Disarmed after take" },
   { id: "recording", label: "Recording" },
@@ -105,8 +107,10 @@ export function createMock() {
   let slots: MockSlot[] = [];
   let playing = true;
   let hostLoop = false;
-  // Live's record flag. Live never sends it to a plugin, so Griddy ignores it; the mock keeps it to show that.
+  // Live's record button. Live never sends it to a plugin; the Live script sets Record arm from it and the track's arm.
   let liveRecording = false;
+  // The Live script runs: Live owns the arm, and REC and Arm ask it, a tenth of a second later.
+  let liveScript = true;
   let countInBeats = 0;
   let exportState: ExportState = "idle";
   let blocked = false;
@@ -128,6 +132,7 @@ export function createMock() {
     playing = true;
     hostLoop = false;
     liveRecording = false;
+    liveScript = true;
     countInBeats = 0;
     exportState = "idle";
     blocked = false;
@@ -145,24 +150,35 @@ export function createMock() {
         start = performance.now();
         break;
       case "armed-stopped":
-        claim(0, { takes: [take(1, "kept", 0)] });
+        claim(0, { liveArmed: true, takes: [take(1, "kept", 0)] });
         claim(1, { takes: [take(2, "kept", 0)] });
-        armParam()?.set(true);
         playing = false;
         start = performance.now();
         break;
       case "armed-playing":
       case "armed-recording":
-        claim(0, { takes: [take(1, "kept", 0)] });
+        claim(0, { liveArmed: true, takes: [take(1, "kept", 0)] });
         claim(1, { takes: [take(2, "kept", 0)] });
-        armParam()?.set(true);
         liveRecording = id === "armed-recording";
         start = performance.now();
         break;
-      case "countin":
+      case "not-armed":
         claim(0, { takes: [take(1, "kept", 0)] });
         claim(1, { takes: [take(2, "kept", 0)] });
-        armParam()?.set(true);
+        playing = false;
+        start = performance.now();
+        break;
+      case "no-script":
+        liveScript = false;
+        claim(0, { takes: [take(1, "kept", 0)] });
+        claim(1, { takes: [take(2, "kept", 0)] });
+        playing = false;
+        start = performance.now();
+        break;
+      case "countin":
+        claim(0, { liveArmed: true, takes: [take(1, "kept", 0)] });
+        claim(1, { takes: [take(2, "kept", 0)] });
+        liveRecording = true;
         countInBeats = 8;
         start = performance.now();
         break;
@@ -171,10 +187,10 @@ export function createMock() {
         claim(1, { takes: [take(4, "kept", 0)] });
         break;
       case "recording":
-        claim(0, { recording: true, recordStartPpq: 0, takes: [take(1, "kept", 0)] });
+        claim(0, { liveArmed: true, recording: true, recordStartPpq: 0, takes: [take(1, "kept", 0)] });
         claim(1, { takes: [take(2, "kept", 0)] });
         claim(2, { armed: true });
-        armParam()?.set(true);
+        liveRecording = true;
         break;
       case "review":
         claim(0, { takes: [take(3, "review", 0, 8), take(2, "kept", 0, 8, 0.02), take(1, "archived", 0)] });
@@ -221,9 +237,9 @@ export function createMock() {
         break;
       case "loop":
         hostLoop = true;
-        claim(0, { recording: true, recordStartPpq: 0, takes: [take(1, "kept", 0)] });
+        claim(0, { liveArmed: true, recording: true, recordStartPpq: 0, takes: [take(1, "kept", 0)] });
         claim(1, { takes: [take(2, "kept", 0)] });
-        armParam()?.set(true);
+        liveRecording = true;
         break;
       case "blocked":
         claim(0);
@@ -278,6 +294,27 @@ export function createMock() {
           }
           case "getStatus":
             return status();
+          case "requestInLive": {
+            // What the Live script does with a press of REC or Arm, on its next display tick.
+            const me = own();
+            if (!liveScript || me < 0) return false;
+            const [action] = args as [string];
+            setTimeout(() => {
+              const x = slots[me];
+              if (action === "arm") x.liveArmed = true;
+              if (action === "disarm") x.liveArmed = false;
+              if (action === "record" && x.liveArmed) {
+                liveRecording = true;
+                if (!playing) {
+                  playing = true;
+                  start = performance.now();
+                }
+              }
+              if (action === "stop") liveRecording = false;
+              emit("status", status());
+            }, 120);
+            return true;
+          }
           case "keepTake":
           case "restoreTake": {
             const [slot, id] = args as [number, number];
@@ -381,12 +418,17 @@ export function createMock() {
   function engineStatus() {
     const me = own();
     const panels = panelsOf();
-    // The track's own arm lives in the recordArm parameter; R and the Rec button move it.
+    // The track's own arm lives in the recordArm parameter. With the Live script, the script sets it to "armed in Live
+    // and Live records"; without, R and the Rec button move it.
     if (me >= 0 && slots[me]) {
-      // The one rule, as in the hub: armed plus play records one take, and the take ends the arm.
+      if (liveScript) {
+        const want = !!slots[me].liveArmed && liveRecording;
+        if (armParam()?.get() !== want) armParam()?.set(want);
+      }
+      // The one rule, as in the hub: armed plus play records. Without the script, the take ends the arm.
       if (slots[me].recording && (!armParam()?.get() || !playing)) {
         finishTake(me);
-        armParam()?.set(false);
+        if (!liveScript) armParam()?.set(false);
       }
       const armed = !!armParam()?.get();
       if (armed && playing && !slots[me].recording && ppqNow() >= 0) {
@@ -400,13 +442,13 @@ export function createMock() {
     const recording = me >= 0 && !!slots[me]?.recording;
     return {
       session, sessionFolder: `${outputFolder}/Sessions/${session}`, takesBytes: 412_000_000, slot: Math.max(0, me), instances: slots.filter((x) => x.claimed).length + (me < 0 ? 1 : 0),
-      recording, armed: me >= 0 && !!slots[me]?.armed, master: me < 0, error: "",
+      recording, armed: me >= 0 && !!slots[me]?.armed, master: me < 0, error: "", liveScript,
       recordHint: me >= 0 && slots[me]?.armed && !slots[me]?.recording && !playing ? `Armed. Press play in Live to record slot ${me + 1}.` : "",
       claimedMask: slots.reduce((m, x, i) => (x.claimed ? m | (1 << i) : m), 0),
       slots: slots.slice(0, panels).map((x, slot) => ({
         slot, claimed: x.claimed, recording: x.recording, status: !x.takes.some((t) => t.state === "kept") ? "noTake" : x.claimed ? "locked" : "prior",
         source: !x.takes.length ? "none" : x.claimed ? "fingerprint" : "hostPosition", takeId: x.playingTake ?? x.takes.find((t) => t.state === "kept")?.id ?? -1, gap: !!x.gap, warp: false, lockMs: 180,
-        recordStartPpq: x.recordStartPpq, trackName: x.name, armed: x.armed, review: x.takes.some((t) => t.state === "review"),
+        recordStartPpq: x.recordStartPpq, trackName: x.name, armed: x.armed, liveArmed: !!x.liveArmed, review: x.takes.some((t) => t.state === "review"),
       })),
       takes: slots.slice(0, panels).map((x) => x.takes),
       layout: layoutVar(),
