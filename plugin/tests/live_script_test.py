@@ -92,14 +92,27 @@ class Song(Listenable):
     def __init__(self, tracks):
         Listenable.__init__(self)
         self.tracks, self.record_mode, self.session_record, self.is_playing, self.tempo = tracks, False, False, False, 120.0
+        self.current_song_time, self.punch_in, self.loop_start = 0.0, False, 0.0
 
     def __setattr__(self, k, v):
         object.__setattr__(self, k, v)
-        if k in ("record_mode", "session_record") and "_listeners" in self.__dict__:
+        if k in ("record_mode", "session_record", "is_playing") and "_listeners" in self.__dict__:
             self._notify(k)
 
     def start_playing(self):
         self.is_playing = True
+
+
+class SongWrapper(object):
+    """What song() gives a script in Live: a new Python object each call for the same song."""
+    def __init__(self, real):
+        object.__setattr__(self, "_real", real)
+
+    def __getattr__(self, k):
+        return getattr(self._real, k)
+
+    def __setattr__(self, k, v):
+        setattr(self._real, k, v)
 
 
 scheduled = []
@@ -110,7 +123,7 @@ class FakeControlSurface(object):
         self._song = c_instance
 
     def song(self):
-        return self._song
+        return SongWrapper(self._song)
 
     def component_guard(self):
         class Guard(object):
@@ -301,6 +314,67 @@ vocals.mute = True
 surface.update_display()
 with open(link.TIMELINE_PATH) as f:
     check(not dict((t["name"], t) for t in json.load(f)["tracks"])["Vocals"]["audible"], "muting the track is written at once")
+
+
+
+def written_tracks():
+    surface.update_display()
+    with open(link.TIMELINE_PATH) as f:
+        data = json.load(f)
+    return data, dict((t["name"], t) for t in data["tracks"])
+
+
+# Where each recording begins, so Griddy's take starts with Live's and not when Griddy hears of it.
+vocals.mute = False
+song.set("session_record", False)
+song.set("record_mode", False)
+song.set("is_playing", False)
+vocals.set("arm", True)
+late.set("arm", False)
+run_scheduled()
+data, tracks = written_tracks()
+check(tracks["Vocals"]["armed"] and not tracks["Keys"]["armed"], "the arrangement file says which tracks Live has armed")
+check("recordFrom" not in tracks["Vocals"] and not data["recording"], "and no recording start while Live is not recording")
+
+song.current_song_time = 16.0
+song.set("record_mode", True)
+data, tracks = written_tracks()
+check(data["recording"] and tracks["Vocals"]["recordFrom"] == 16.0, "record on with Live stopped: the recording starts at the playhead")
+check("recordFrom" not in tracks["Keys"], "a track not armed has no recording start")
+song.current_song_time = 8.0
+song.set("is_playing", True)
+data, tracks = written_tracks()
+check(tracks["Vocals"]["recordFrom"] == 8.0, "and where playback really starts, if the playhead moved first")
+
+song.current_song_time = 40.0
+late.set("arm", True)
+run_scheduled()
+data, tracks = written_tracks()
+check(tracks["Keys"]["recordFrom"] == 40.0 and tracks["Vocals"]["recordFrom"] == 8.0, "a track armed during a recording starts where it was armed")
+
+song.set("record_mode", False)
+song.current_song_time = 50.0
+song.punch_in, song.loop_start = True, 56.0
+song.set("record_mode", True)
+data, tracks = written_tracks()
+check(tracks["Vocals"]["recordFrom"] == 56.0, "punch in on: the recording starts at the punch in point")
+song.punch_in = False
+
+song.set("record_mode", False)
+song.set("session_record", True)
+data, tracks = written_tracks()
+check("recordFrom" not in tracks["Vocals"], "session recording has no arrangement start")
+song.set("session_record", False)
+
+# A notification Live never sent: the next display tick still puts Griddy right.
+song.set("record_mode", True)
+run_scheduled()
+object.__setattr__(arm, "value", 0.0)
+surface.update_display()
+check(arm.value == 1.0, "Record arm out of step with Live is put right on the next display tick")
+object.__setattr__(song, "record_mode", False)
+surface.update_display()
+check(arm.value == 0.0, "and so is a record off Live did not announce")
 
 surface.disconnect()
 check(not os.path.exists(link.TIMELINE_PATH), "disconnecting removes the arrangement file, so Griddy follows the sound again")

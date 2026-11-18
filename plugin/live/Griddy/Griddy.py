@@ -103,30 +103,36 @@ class Griddy(ControlSurface):
         self._timeline_at = 0.0
         self._born = {}       # file path -> when it was created, seconds since the epoch
         self._timeline_failed = False
+        self._record_from = None  # beat where Live's arrangement recording began, while it records
+        self._armed_from = {}     # track name -> beat where it was armed while Live recorded
+        self._was_recording = False
+        self._last_arm = {}       # track name -> arm last seen, to log changes made in Live
         with self.component_guard():
             song = self.song()
-            self._listen(song, "tracks", self._rebuild)
-            self._listen(song, "record_mode", self._request_sync)
-            self._listen(song, "session_record", self._request_sync)
+            # Kept for the script's whole life. (They used to be dropped at every rebuild: Live hands out a new song
+            # object each time, so "is it the song" was never true, and Griddy stopped following Live's record button.)
+            self._listen(song, "tracks", self._rebuild, keep=True)
+            self._listen(song, "record_mode", self._record_changed, keep=True)
+            self._listen(song, "session_record", self._record_changed, keep=True)
+            self._listen(song, "is_playing", self._playing_changed, keep=True)
             self._rebuild()
         self.log_message("Griddy: linking Griddy's Record arm to Live's arm and record buttons")
 
     # Listeners ---------------------------------------------------------------------------------------------------
 
-    def _listen(self, subject, name, fn):
+    def _listen(self, subject, name, fn, keep=False):
         add = getattr(subject, "add_%s_listener" % name)
         remove = getattr(subject, "remove_%s_listener" % name)
         has = getattr(subject, "%s_has_listener" % name)
         if not has(fn):
             add(fn)
-            self._listeners.append((subject, remove, has, fn))
+            self._listeners.append((keep, remove, has, fn))
 
     def _forget_all(self, keep_song=False):
         kept = []
-        song = self.song()
         for entry in self._listeners:
-            subject, remove, has, fn = entry
-            if keep_song and subject is song:
+            keep, remove, has, fn = entry
+            if keep_song and keep:
                 kept.append(entry)
                 continue
             try:
@@ -142,13 +148,51 @@ class Griddy(ControlSurface):
         for track in self.song().tracks:
             if not getattr(track, "can_be_armed", False):
                 continue
-            self._listen(track, "arm", self._request_sync)
+            self._listen(track, "arm", self._arm_changed(track))
             self._listen(track, "devices", self._rebuild_later)
             for device in track.devices:
                 arm = griddy_arm(device)
                 if arm is not None:
                     self._listen(arm, "value", self._request_sync)  # anything else writing it is put back
         self._request_sync()
+
+    def _arm_changed(self, track):
+        """A listener for one track's arm: notes where a track armed during a recording starts recording."""
+        def listener():
+            song = self.song()
+            if track.arm and song.record_mode and song.is_playing:
+                self._armed_from[track.name] = song.current_song_time
+            elif not track.arm:
+                self._armed_from.pop(track.name, None)
+            self._request_sync()
+        listener.__name__ = "griddy_track_arm_%d" % id(listener)
+        return listener
+
+    def _record_changed(self):
+        song = self.song()
+        if song.record_mode and self._record_from is None:
+            self._record_from = self._recording_starts(song)
+            self.log_message("Griddy: Live's record on, recording from beat %.3f" % self._record_from)
+        elif not song.record_mode and self._record_from is not None:
+            self._record_from = None
+            self._armed_from = {}
+            self.log_message("Griddy: Live's record off")
+        self._request_sync()
+
+    def _playing_changed(self):
+        song = self.song()
+        if song.is_playing and song.record_mode:
+            # Record was on with Live stopped: the recording starts where playback does.
+            self._record_from = self._recording_starts(song)
+            self._armed_from = {}
+        self._request_sync()
+
+    def _recording_starts(self, song):
+        """The beat Live's arrangement recording starts at: now, or the punch in point if it is later."""
+        start = song.current_song_time
+        if getattr(song, "punch_in", False) and getattr(song, "loop_start", start) > start:
+            start = song.loop_start
+        return start
 
     def _rebuild_later(self):
         # Live does not allow changes from inside a notification; rebuilding listeners is safe a tick later too.
@@ -170,12 +214,19 @@ class Griddy(ControlSurface):
         song = self.song()
 
         recording = self._recording()
+        if recording != self._was_recording:
+            self._was_recording = recording
+            self.log_message("Griddy: Live %s" % ("records" if recording else "stops recording"))
         for track in self.song().tracks:
             if not getattr(track, "can_be_armed", False):
                 continue
             arms = [a for a in (griddy_arm(d) for d in track.devices) if a is not None]
             if not arms:
                 continue
+
+            if self._last_arm.get(track.name) != bool(track.arm):
+                self._last_arm[track.name] = bool(track.arm)
+                self.log_message("Griddy: %s %s in Live" % (track.name, "armed" if track.arm else "disarmed"))
 
             if track.arm and track.current_monitoring_state == MONITOR_OFF:
                 track.current_monitoring_state = MONITOR_AUTO
@@ -274,6 +325,11 @@ class Griddy(ControlSurface):
         except Exception as e:
             self.log_message("Griddy: could not do a request from Griddy: %s" % e)
         try:
+            # Every tick, not only on Live's notifications: a missed one can no longer leave Griddy out of step.
+            self._sync()
+        except Exception as e:
+            self.log_message("Griddy: could not set Griddy's arm: %s" % e)
+        try:
             self._write_timeline()
         except Exception as e:
             if not self._timeline_failed:
@@ -319,13 +375,19 @@ class Griddy(ControlSurface):
                 add(clip, True)
 
         slot = params[SLOT_PARAMETER] if SLOT_PARAMETER in params else None
-        return {
+        entry = {
             "name": track.name,
+            "armed": bool(track.arm),
             "slot": slot.str_for_value(slot.value) if slot is not None and hasattr(slot, "str_for_value") else str(slot or ""),
             "audible": not (track.mute or getattr(track, "muted_via_solo", False)),
             "arrangement": getattr(track, "playing_slot_index", -1) < 0,
             "clips": clips,
         }
+        song = self.song()
+        if track.arm and song.record_mode and self._record_from is not None:
+            # Where this track's recording begins, so Griddy's take starts there too, not when Griddy hears of it.
+            entry["recordFrom"] = max(self._record_from, self._armed_from.get(track.name, self._record_from))
+        return entry
 
     def _write_timeline(self):
         song = self.song()
@@ -353,7 +415,7 @@ class Griddy(ControlSurface):
             os.makedirs(folder)
         temporary = TIMELINE_PATH + ".tmp"
         with open(temporary, "w") as f:
-            json.dump({"version": 1, "written": now, "tracks": tracks}, f)
+            json.dump({"version": 1, "written": now, "recording": self._recording(), "tracks": tracks}, f)
         os.replace(temporary, TIMELINE_PATH)
 
     def disconnect(self):
