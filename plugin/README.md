@@ -51,7 +51,20 @@ Which camera sits in which slot, the takes folder and the session are saved with
 
 ## Comps
 
-Put pieces of several takes together in Live's take lanes and each piece shows its own take's video, with hard cuts. Where no clip plays the picture goes black. Each tile shows which take is playing ("TAKE 3", or "NO CLIP"), the Slot tab marks it "Playing", and the takes timeline shows it at the playhead. This needs a Griddy on the track: a slot whose track has no Griddy follows Live's position only, and Griddy says so. A take replaced while in review is archived, not deleted, so its piece of a comp keeps its video; Retake still deletes. The sync recognises the newest 20 takes per slot (30 minutes of take audio at most); older takes say "Too old to follow comps" and stay restorable. Details and measurements: `docs/engine-design.md`, Comping.
+Put pieces of several takes together in Live's take lanes and each piece shows its own take's video, with hard cuts. Where no clip plays (a deleted stretch, past a take's end) the picture goes black after 0.15 s of no sound, with no exceptions, and comes back as soon as a clip plays again. Comps need Griddy to have heard each take while recording: if a take recorded no sound (the track's Monitor was Off), its take row and the log say so, and it cannot be told apart from the others. Each tile shows which take is playing ("TAKE 3", or "NO CLIP"), the Slot tab marks it "Playing", and the takes timeline shows it at the playhead. This needs a Griddy on the track: a slot whose track has no Griddy follows Live's position only, and Griddy says so. A take replaced while in review is archived, not deleted, so its piece of a comp keeps its video; Retake still deletes. The sync recognises the newest 20 takes per slot (30 minutes of take audio at most); older takes say "Too old to follow comps" and stay restorable. Details and measurements: `docs/engine-design.md`, Comping.
+
+## Link Griddy's arm to Live (control surface script)
+
+Live does not tell a plugin whether its track is armed or whether Live records, so on its own Griddy records whenever its own arm is on and Live plays. The script in `live/Griddy` links them: a track's Griddy is armed only while that track is armed in Live and Live records (Arrangement or Session), and Griddy's own arm button follows Live's. When a track with Griddy on it is armed with Monitor Off, the script sets Monitor to Auto, so Griddy hears what it records; it changes Monitor in no other case.
+
+Install it once, with Live closed:
+
+```sh
+mkdir -p ~/Music/Ableton/User\ Library/Remote\ Scripts
+cp -R live/Griddy ~/Music/Ableton/User\ Library/Remote\ Scripts/
+```
+
+Then in Live: Settings, Link, Tempo & MIDI, pick Griddy as a Control Surface (no input or output port needed). It logs to Live's Log.txt. `python3 -B tests/live_script_test.py` checks its rules against a fake Live; Live's real objects are only checked by using it in Live.
 
 ## The real limits (read this before testing in Ableton)
 

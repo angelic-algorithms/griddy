@@ -124,6 +124,7 @@ jobs:
       - name: Tests
         run: |
           ./build/GriddyTests_artefacts/Release/GriddyTests
+          python3 -B tests/live_script_test.py
           xvfb-run -a ./build/GriddyHostSmokeTest_artefacts/Release/GriddyHostSmokeTest build/Griddy_artefacts/Release/VST3/Griddy.vst3
 
       - name: Decoders and exporter (gate, not timing sensitive)
