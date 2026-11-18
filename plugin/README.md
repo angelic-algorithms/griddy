@@ -1,0 +1,193 @@
+# Griddy (plugin edition)
+
+Griddy is an overdub video recorder that lives inside your DAW, in the style of the Acapella app: a grid of slots, one per track, where every slot holds the video of a take you performed. This branch is being rebuilt around that idea (see `docs/engine-design.md` once it lands). The code you see here is the transitional state after the cleanup commit: the old composite recorder, Cut and Spotlight layouts and switch rate are gone, and the take recording and playback engine is being added next.
+
+One C++ codebase (JUCE 9) builds **VST3, AU and a Standalone app**, with the whole interface written in **React and TypeScript** and shown in a WebView. CLAP was removed to keep the matrix small.
+
+Status: it builds and passes its tests on Linux with test pattern "cameras". The macOS camera code is written but has not been compiled yet; the GitHub Actions workflow (`.github/workflows/plugin.yml`) compiles and validates it on a Mac runner on every push.
+
+## How it works
+
+```
+ DAW audio thread          capture threads             engine thread (30 fps)                message thread
+ ────────────────          ───────────────             ──────────────────────                ──────────────
+ processBlock()            AVFoundation camera ─┐      read transport                        WebView (React UI)
+   read play head          AVFoundation camera ─┼─▶    BeatClock: where are we musically?    ◀── events: transport,
+   write TransportState    test pattern ────────┘      CollageLayout: grid cells                   preview, status
+   (lock free) ───────────────────────────────────▶    Compositor: draw 1280x720 frame       ──▶ native functions:
+                           FrameStore (newest                                                     setSlotSource, ...
+                           frame per camera)            Preview: JPEG for the UI ──────────▶ /preview.jpg
+```
+
+The ideas, from first principles:
+
+1. **The audio thread only reports the clock.** A plugin can't own the DAW's transport, but every audio block the host tells us the tempo, the song position in quarter notes (PPQ), the time signature, and whether it's playing and recording. `processBlock` copies that into a `TransportState` using a sequence lock, which never blocks, so the audio thread can't be slowed down by video.
+2. **Video runs on its own clock.** The `VideoEngine` thread ticks at 30 fps. Audio blocks arrive every few milliseconds, video frames every 33 ms, so `BeatClock` extrapolates from the last block at the current tempo. When the DAW stops, it keeps free running so the preview stays alive.
+3. **Layout is a pure function.** `computeLayout(slots)` decides the grid cells; one slot fills the whole frame (1x1).
+4. **One compositor, one truth.** The C++ compositor draws the grid once per frame and the UI preview is a downscaled JPEG of that image.
+5. **Cameras are mailboxes, not queues.** Each camera drops its newest frame into the `FrameStore`, replacing the old one. If the machine is busy we skip frames rather than fall behind, so latency stays flat.
+6. **The UI is a web app talking to C++.** JUCE's WebView bridge gives three channels: parameter relays (slots, arm, record mode stay in sync with DAW automation both ways), native functions (async calls like `setSlotSource`), and events pushed from C++ (`transport`, `preview`, `status`). The preview image is served by a resource provider at `/preview.jpg` instead of being base64 encoded into JSON.
+
+### Parameters (automatable in the DAW)
+
+| Parameter | Values |
+| --- | --- |
+| Cameras (slots) | 1 to 9 |
+| Record arm | on, off |
+| Record when (not used) | kept only so older sets load; its value is ignored |
+
+To record, click **Rec** in Griddy and press play in Live. That records one take, and Rec switches off when it ends, so the next play plays the take back. Live's own record button and track arm make no difference to Griddy: Live does not tell a plugin about either.
+
+Which camera sits in which slot, the takes folder and the session are saved with your DAW project. A saved project reopens its own takes; a new set, a set made from a template and a copied project each start a session of their own (see "Sessions" in `docs/engine-design.md`). The drawer shows which session folder is in use, with **New session** to start an empty one, and each slot has **Reset slot** to get back to the live camera. Neither deletes anything.
+
+## Formats and hosts
+
+| Format | Hosts | Notes |
+| --- | --- | --- |
+| VST3 | Ableton Live, Cubase, Studio One, Reaper, Bitwig, FL Studio | Main target |
+| AU | Logic Pro, GarageBand, Live on Mac | macOS only |
+| Standalone | none needed | Its own app with its own camera permission; the fallback when a DAW blocks cameras |
+| AAX (Pro Tools) | Pro Tools | Not built. Needs Avid's AAX SDK, an Avid developer account and PACE signing |
+
+## Comps
+
+Put pieces of several takes together in Live's take lanes and each piece shows its own take's video, with hard cuts. Where no clip plays (a deleted stretch, past a take's end) the picture goes black after 0.15 s of no sound, with no exceptions, and comes back as soon as a clip plays again. Comps need Griddy to have heard each take while recording: if a take recorded no sound (the track's Monitor was Off), its take row and the log say so, and it cannot be told apart from the others. Each tile shows which take is playing ("TAKE 3", or "NO CLIP"), the Slot tab marks it "Playing", and the takes timeline shows it at the playhead. This needs a Griddy on the track: a slot whose track has no Griddy follows Live's position only, and Griddy says so. A take replaced while in review is archived, not deleted, so its piece of a comp keeps its video; Retake still deletes. The sync recognises the newest 20 takes per slot (30 minutes of take audio at most); older takes say "Too old to follow comps" and stay restorable. Details and measurements: `docs/engine-design.md`, Comping.
+
+## Link Griddy's arm to Live (control surface script)
+
+Live does not tell a plugin whether its track is armed or whether Live records, so on its own Griddy records whenever its own arm is on and Live plays. The script in `live/Griddy` links them: a track's Griddy is armed only while that track is armed in Live and Live records (Arrangement or Session), and Griddy's own arm button follows Live's. When a track with Griddy on it is armed with Monitor Off, the script sets Monitor to Auto, so Griddy hears what it records; it changes Monitor in no other case. With the script running, Griddy shows an Arm button next to REC: Arm arms or disarms that one track in Live, and REC records only when the track is armed, switching Live's record button on and starting playback if Live is stopped; pressing REC again switches Live's record button off. The buttons ask Live through `live-requests.json`, next to the arrangement file, and never through a parameter, so a press cannot echo back or be written as automation. Without the script there is no Arm button, and REC arms Griddy itself as before. See [docs/recording-flow.md](docs/recording-flow.md) for what every tile shows in every case. The script also copies Live's arm to Griddy's "Track armed in Live" parameter and to the arrangement file, so an armed track's tile shows its camera (in a set saved before that parameter existed, Live doesn't show it to the script, and the file carries the arm alone). While Live records, the file also says the beat each track's recording began at; Griddy keeps the last second of sound and camera frames of an armed track, so its take starts there and not a tenth of a second later, when it hears that Live records. Last, it writes the arrangement of every Griddy track to `~/Library/Application Support/Griddy/live-timeline.json` (each clip's place, whether it plays and which recording it plays), so Griddy goes black exactly where no clip plays and switches takes on the frame of a cut. Without that file Griddy works both out from the sound, about 0.1 to 0.15 s later.
+
+Install it once, with Live closed:
+
+```sh
+mkdir -p ~/Music/Ableton/User\ Library/Remote\ Scripts
+cp -R live/Griddy ~/Music/Ableton/User\ Library/Remote\ Scripts/
+```
+
+Then in Live: Settings, Link, Tempo & MIDI, pick Griddy as a Control Surface (no input or output port needed). It logs to Live's Log.txt. `python3 -B tests/live_script_test.py` checks its rules against a fake Live; Live's real objects are only checked by using it in Live.
+
+## Film a video for a recording that is already there
+
+For laying down a part one piece at a time (kick, then snare, then hats) and filming each later, while Live plays it back. Click an audio clip on a Griddy track in Live, on the main lane or a take lane, and that track's Griddy shows "Film for: …" and a Film button. The Slot tab also lists every recording on the track, marked with whether a video shows for it, each with its own Film button. Film asks Live, through the script, to play from one bar before the clip to its end, with Live's record button off and the track disarmed, so Live records nothing. Griddy films while Live plays it, and the take goes to review like any take. It stores which file it was filmed for (`filmedFor` in take.json), and from then on every clip of that file shows it, moved, cut, comped or on a take lane, found by the file's path rather than by where the take started. Where the film does not cover the file, the take recorded with the file shows, or black. A lane clip plays only while its lane is auditioned (T), which the script cannot switch, so Griddy says so. A clip that loops past its loop end cannot be filmed, since Griddy cannot tell where its recording starts. Needs the Live script. Every case is in [docs/recording-flow.md](docs/recording-flow.md).
+
+## The real limits (read this before testing in Ableton)
+
+**Camera permission belongs to the DAW, not the plugin.** A plugin is a library inside the DAW's process, so macOS checks the DAW's `Info.plist` and entitlements. If the DAW never declared `NSCameraUsageDescription`, or it uses the hardened runtime without the camera entitlement, macOS **kills the whole DAW** the moment anything in it opens a camera ([this happened to the SPARTA plugins in Reaper](https://github.com/leomccormack/SPARTA/issues/82)). Griddy checks this before touching AVFoundation (`source/capture/HostPermissions_mac.mm`) and, if the host can't use cameras, shows a banner and opens no camera. It never crashes your session.
+
+**Ableton Live 12 Suite passes.** Its `Info.plist` declares `NSCameraUsageDescription` ("A plug-in or Max for Live device requires access to the camera.") and its signature carries `com.apple.security.device.camera`, so Griddy can open cameras inside Live. The first time it does, macOS asks once whether Live may use the camera. To check another DAW:
+
+```sh
+plutil -extract NSCameraUsageDescription raw "/Applications/<DAW>.app/Contents/Info.plist"
+codesign -d --entitlements - "/Applications/<DAW>.app" 2>/dev/null | grep -i camera
+```
+
+If the first prints text and the second prints `com.apple.security.device.camera` (or nothing, when the DAW isn't hardened), cameras work inside it. If not, the fallback is in "Next steps": a small **Griddy Capture** helper app owns the cameras and shares frames with the plugin.
+
+Some hosts run plugins in a separate helper process. When that happens the check looks at that helper instead, and the banner says what it found.
+
+**Other limits**
+
+* Camera capture is macOS only for now. Windows (Media Foundation) and Linux (V4L2) have no cameras until those backends are written.
+* Compositing is on the CPU (JUCE's software renderer). Fine for 4 cameras at 720p; the GPU path (Metal or Core Image) is on the list for 1080p and more cameras.
+* The AU and VST3 must be code signed and notarized before you share them with anyone else, or macOS Gatekeeper blocks them. Building for yourself doesn't need that.
+* Licensing: JUCE is AGPLv3 or the JUCE licence. The free Starter tier covers up to $20K of revenue or funding in the last 12 months; past that you need Indie or Pro, or release the source under AGPL. Check the [JUCE 9 licence](https://juce.com/legal/juce-9-licence/) before selling it.
+
+## Build it on your Mac
+
+You need Xcode (or its command line tools), CMake 3.22+, Ninja and Node 20+.
+
+```sh
+brew install cmake ninja node
+git clone https://github.com/angelic-algorithms/griddy.git && cd griddy
+git checkout claude/griddy-vst-plugin && cd plugin
+
+# 1. The UI (React, bundled into three files the plugin embeds)
+cd ui && npm ci && npm run build && cd ..
+
+# 2. Configure and build. The first run downloads JUCE 9.0.5.
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build --parallel
+
+# 3. Tests
+./build/GriddyTests_artefacts/Release/GriddyTests
+./build/GriddyHostSmokeTest_artefacts/Release/GriddyHostSmokeTest build/Griddy_artefacts/Release/VST3/Griddy.vst3
+```
+
+Install for your DAWs:
+
+```sh
+cp -R build/Griddy_artefacts/Release/VST3/Griddy.vst3 ~/Library/Audio/Plug-Ins/VST3/
+cp -R build/Griddy_artefacts/Release/AU/Griddy.component ~/Library/Audio/Plug-Ins/Components/
+auval -v aufx Grdy Pkag   # Apple's AU check; should end with "AU VALIDATION SUCCEEDED"
+```
+
+Prefer Xcode? `cmake -S . -B xcode -G Xcode` and open `xcode/Griddy.xcodeproj`.
+
+### First test
+
+1. Run the Standalone app first (`build/Griddy_artefacts/Release/Standalone/Griddy.app`). It has its own camera permission, so macOS asks once. Pick your FaceTime camera, Continuity Camera (iPhone) and capture card in the slots and confirm the preview.
+2. In Live, rescan plugins, drop Griddy on any audio track. Its slot starts with the FaceTime HD camera (or the first camera it finds). Click a camera in the Slot tab to switch to it, or click the one that is on to turn it off. If the banner says cameras are blocked, that's the permission limit above.
+3. Press play and watch the transport readout follow the DAW. Take recording returns with the engine milestone.
+
+## UI mockups
+
+The street style look is in `docs/mockups/4-street.png`. The interactive prototype is the reference for the new UI.
+
+## Working on the UI
+
+The UI is a normal React app in `ui/src`. `bridge.ts` is the only file that talks to C++; components use hooks from `hooks.ts`.
+
+```sh
+cd ui && npm run dev       # esbuild watch + server on http://localhost:5173
+```
+
+Open that address in a browser and the UI runs against a mock backend (`mock.ts`) that fakes a playing DAW, so you can style without rebuilding. To see changes inside the real plugin, configure once with `-DGRIDDY_UI_DEV_SERVER=ON`; the plugin then loads the dev server instead of its embedded copy, and reopening the plugin window picks up your edits.
+
+## What's tested
+
+On Linux in this repo's first pass:
+
+* `GriddyTests`: layout math, beat clock (tempo extrapolation, stopped transport, 7/8, float edge cases), the lock free transport snapshot under a racing writer, the compositor's pixels, the frame store and test pattern threads.
+* `GriddyHostSmokeTest`: a fake DAW loads the built VST3, checks the parameters, plays at 100 BPM from bar 3, confirms audio passes through untouched, opens and closes the WebView editor, and restores state into a new instance.
+* The Standalone app renders the React UI with live camera previews.
+* Test patterns are for tests only: the harness, the unit tests and the smoke test set `GRIDDY_TEST_PATTERNS=1`, and the plugin never lists them otherwise.
+
+Not yet compiled or run anywhere: `AVFoundationCapture.mm`, `HostPermissions_mac.mm`, the AU inside a real DAW. The macOS job in `.github/workflows/plugin.yml` compiles all of it, runs both test programs and runs `auval`.
+
+## Next steps
+
+1. **Mac bring up:** build, run the tests, try real cameras in the Standalone, then in Live. Fix whatever the first Mac compile finds in the two `.mm` files.
+2. **Griddy Capture helper (only for DAWs that block cameras; Live doesn't):** a tiny menu bar app that owns the cameras and publishes frames through shared GPU memory (IOSurface, the same trick Syphon uses). The plugin swaps its `CaptureSource` for an IOSurface reader; everything else stays the same.
+3. **Playback in sync:** load a take and play it back locked to the DAW's PPQ, which is what the browser version does today.
+4. **GPU compositing:** Core Image or Metal, for 1080p output and 9 cameras.
+5. **Per camera ISO recording:** also save each camera's raw feed, for re editing later.
+6. **Audio in the file:** write the track's audio into the .mov so takes are self contained.
+7. **Windows cameras:** Media Foundation backend behind the same `CaptureSource` interface.
+
+## Project layout
+
+```
+CMakeLists.txt                  JUCE 9 targets, UI embedding, tests
+source/
+  PluginProcessor.*             parameters, transport capture, saved state
+  PluginEditor.*                WebView, native functions, events, preview resource
+  UiResources.*                 serves the embedded ui/dist files
+  engine/
+    TransportState.h            lock free host transport snapshot
+    BeatClock.*                 musical time for the video thread
+    CollageLayout.*             grid cells as a pure function
+    Compositor.*                draws the collage frame
+    FrameStore.*                newest frame per camera
+    VideoEngine.*               the 30 fps loop and previews
+  capture/
+    CaptureSource.h             camera interface and device listing
+    TestPatternSource.*         fake camera for tests and blocked hosts
+    AVFoundationCapture.mm      webcams, Continuity Camera, capture cards
+    HostPermissions_mac.mm      the "will macOS kill this DAW?" check
+ui/                             React + TypeScript, built with esbuild
+tests/                          unit tests and the fake DAW smoke test
+```
+
+## Engine harness
+
+`GriddyHarness` runs real time scenarios headlessly (fake DAW transport, fake webcam, real take files). Run `GriddyHarness` for all scenarios, or `GriddyHarness soak --soak-seconds 600`. Results: `docs/engine-benchmarks.md`. The comp scenarios are `comp_aligned`, `comp_crossfade` (20 and 100 ms fades), `comp_loop_passes`, `comp_moved`, `comp_gap`, `comp_end`, `comp_silent_take`, `comp_unowned`, `comp_recording_load` and the `comp_bench` measurements; run them with `GRIDDY_NO_COMP=1` to see the behaviour before comping.

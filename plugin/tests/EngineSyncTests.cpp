@@ -1,0 +1,715 @@
+#include <juce_core/juce_core.h>
+
+#include "engine/HostClock.h"
+#include "engine/LiveTimeline.h"
+#include "engine/SeqLock.h"
+#include "engine/SpscRing.h"
+#include "engine/SyncController.h"
+#include "engine/TakeFormat.h"
+#include "engine/TakeHistory.h"
+#include "engine/sync/EmbeddedSync.h"
+#include "engine/sync/Fingerprint.h"
+#include "engine/sync/HostPositionClipSource.h"
+
+#include "TestSignals.h"
+
+#include <random>
+#include <thread>
+
+using namespace griddy;
+
+using griddy::testing::makeMusic;
+
+//==============================================================================
+struct PrimitiveTests : juce::UnitTest
+{
+    PrimitiveTests() : UnitTest ("Lock free primitives", "Griddy") {}
+
+    struct Pair { int64_t a, b; };
+
+    void runTest() override
+    {
+        beginTest ("seqlock never shows a torn value");
+        {
+            SeqLock<Pair> lock;
+            std::atomic<bool> stop { false };
+            std::atomic<int> torn { 0 };
+
+            std::thread writer ([&] { for (int64_t i = 1; ! stop; ++i) lock.write ({ i, -i }); });
+            for (int i = 0; i < 300000; ++i)
+            {
+                const auto p = lock.read();
+                if (p.a != -p.b)
+                    ++torn;
+            }
+            stop = true;
+            writer.join();
+            expectEquals (torn.load(), 0);
+        }
+
+        beginTest ("spsc ring delivers every item in order and counts drops");
+        {
+            SpscRing<int> ring (1024);
+            std::atomic<bool> done { false };
+            int next = 0, bad = 0;
+
+            std::thread producer ([&]
+            {
+                for (int i = 0; i < 200000;)
+                    i += (int) ring.write (&i, 1) > 0 ? 1 : 0;
+                done = true;
+            });
+
+            while (! done || ring.available() > 0)
+            {
+                int v;
+                if (ring.read (&v, 1) == 1)
+                {
+                    if (v != next)
+                        ++bad;
+                    ++next;
+                }
+            }
+
+            producer.join();
+            expectEquals (bad, 0);
+            expectEquals (next, 200000);
+
+            SpscRing<int> small (16);
+            int block[64] = {};
+            expectEquals ((int) small.write (block, 64), 16);
+            expectEquals ((int) small.numDropped(), 48);
+        }
+
+        beginTest ("wav round trip");
+        {
+            const auto f = juce::File::createTempFile (".wav");
+            WavWriter w;
+            expect (w.open (f, 44100.0));
+            std::vector<float> a (1000);
+            for (size_t i = 0; i < a.size(); ++i)
+                a[i] = std::sin ((float) i * 0.1f) * 0.5f;
+            w.write (a.data(), 1000);
+            w.close();
+
+            std::vector<float> b;
+            double sr = 0.0;
+            expect (readWav (f, b, sr));
+            expectEquals (sr, 44100.0);
+            expectEquals ((int) b.size(), 1000);
+            expectWithinAbsoluteError (b[500], a[500], 1.0e-4f);
+            f.deleteFile();
+        }
+    }
+};
+
+//==============================================================================
+struct EmbeddedSyncTests : juce::UnitTest
+{
+    EmbeddedSyncTests() : UnitTest ("Embedded sync", "Griddy") {}
+
+    void runTest() override
+    {
+        const double sr = 48000.0;
+
+        beginTest ("every frame is found, with the right tag, counter and position");
+        {
+            std::vector<float> a ((size_t) (sr * 5.0), 0.0f);
+            embedded::Encoder enc (sr, 42);
+            enc.mixInto (a.data(), (int) a.size());
+
+            embedded::Decoder dec (sr);
+            std::vector<embedded::Detection> out;
+            for (size_t i = 0; i < a.size(); i += 480)
+                dec.push (a.data() + i, 480, out);
+
+            const auto expected = (int) (5.0 / (48.0 * 120.0 / sr)) - 1;
+            expect ((int) out.size() >= expected, "found " + juce::String ((int) out.size()) + " frames, expected about " + juce::String (expected));
+
+            int wrong = 0, worst = 0;
+            for (size_t i = 0; i < out.size(); ++i)
+            {
+                if (out[i].takeTag != 42 || out[i].counter != i)
+                    ++wrong;
+                worst = std::max (worst, (int) std::abs (out[i].endIndex - out[i].takeSample));
+            }
+
+            expectEquals (wrong, 0);
+            expect (worst <= 4, "timing off by " + juce::String (worst) + " samples");
+            logMessage ("worst timing error " + juce::String (worst) + " samples");
+        }
+
+        beginTest ("found under music and hiss, and nothing is found in music alone");
+        {
+            auto music = makeMusic (sr, 8.0, 11, 0.5f);
+            std::mt19937 rng (5);
+            std::normal_distribution<float> nd (0.0f, 1.0f);
+            for (auto& x : music)
+                x += 0.001f * nd (rng);
+
+            auto clean = music;
+            embedded::Decoder none (sr);
+            std::vector<embedded::Detection> falseHits;
+            for (size_t i = 0; i < clean.size(); i += 480)
+                none.push (clean.data() + i, 480, falseHits);
+            expectEquals ((int) falseHits.size(), 0);
+
+            embedded::Encoder enc (sr, 9);
+            enc.mixInto (music.data(), (int) music.size());
+            embedded::Decoder dec (sr);
+            std::vector<embedded::Detection> out;
+            for (size_t i = 0; i < music.size(); i += 480)
+                dec.push (music.data() + i, 480, out);
+
+            expect (out.size() > 40, "only " + juce::String ((int) out.size()) + " frames under music");
+        }
+
+        beginTest ("a clip cut from the middle still reports the right take position");
+        {
+            std::vector<float> a ((size_t) (sr * 6.0), 0.0f);
+            embedded::Encoder enc (sr, 3);
+            enc.mixInto (a.data(), (int) a.size());
+
+            const auto cut = (size_t) (sr * 2.2137);
+            embedded::Decoder dec (sr);
+            std::vector<embedded::Detection> out;
+            dec.push (a.data() + cut, (int) (a.size() - cut), out);
+            expect (! out.empty());
+            if (! out.empty())
+            {
+                const auto firstMs = (double) out[0].endIndex / sr * 1000.0;
+                logMessage ("first lock after " + juce::String (firstMs, 1) + " ms of audio");
+                expect (firstMs < 300.0, "lock took " + juce::String (firstMs, 1) + " ms");
+                expect (std::abs (out[0].takeSample - (out[0].endIndex + (int64_t) cut)) <= 4);
+            }
+        }
+    }
+};
+
+//==============================================================================
+struct FingerprintTests : juce::UnitTest
+{
+    FingerprintTests() : UnitTest ("Fingerprint", "Griddy") {}
+
+    void runTest() override
+    {
+        const double sr = 48000.0;
+        auto take = makeMusic (sr, 40.0, 7);
+        auto idx = std::make_shared<fingerprint::Index> (take.data(), take.size(), sr);
+        idx->takeId = 5;
+
+        auto run = [&] (const std::vector<float>& live, double hostStart, double expectedTakeAtHostStart, double& lockMs, double& errMs)
+        {
+            fingerprint::FingerprintClipSource cs (sr);
+            cs.setIndexes ({ idx });
+            lockMs = -1.0;
+            errMs = 1.0e9;
+            const int blk = 512;
+            const auto host0 = (int64_t) (hostStart * sr);
+
+            for (size_t i = 0; i + blk <= live.size(); i += blk)
+            {
+                cs.feed (live.data() + i, blk, host0 + (int64_t) i, true);
+                cs.process();
+                const auto f = cs.latest();
+
+                if (f.locked)
+                {
+                    if (lockMs < 0.0)
+                        lockMs = (double) i / sr * 1000.0;
+                    errMs = std::abs (f.takeSeconds - (f.hostSeconds - hostStart + expectedTakeAtHostStart)) * 1000.0;
+                }
+            }
+        };
+
+        beginTest ("locks fast and exactly on the same audio, any start point");
+        for (double startSec : { 0.0, 7.31, 20.0007, 33.9 })
+        {
+            const auto s0 = (size_t) (startSec * sr);
+            std::vector<float> live (take.begin() + (long) s0, take.begin() + (long) s0 + (long) (6 * sr));
+            double lockMs, errMs;
+            run (live, 100.0, startSec, lockMs, errMs);
+            logMessage ("start " + juce::String (startSec) + " s: lock " + juce::String (lockMs, 0) + " ms, error " + juce::String (errMs, 3) + " ms");
+            expect (lockMs >= 0.0 && lockMs < 1500.0, "no lock");
+            expect (errMs < 2.0, "error " + juce::String (errMs));
+        }
+
+        beginTest ("survives gain change, added noise and a different host sample alignment");
+        {
+            const auto s0 = (size_t) (12.0 * sr) + 17; // not a multiple of the analysis hop
+            std::vector<float> live (take.begin() + (long) s0, take.begin() + (long) s0 + (long) (8 * sr));
+            std::mt19937 rng (2);
+            std::normal_distribution<float> nd (0.0f, 1.0f);
+            for (auto& x : live)
+                x = 0.4f * x + 0.003f * nd (rng);
+
+            double lockMs, errMs;
+            run (live, 50.0, 12.0 + 17.0 / sr, lockMs, errMs);
+            logMessage ("noisy: lock " + juce::String (lockMs, 0) + " ms, error " + juce::String (errMs, 3) + " ms");
+            expect (lockMs >= 0.0 && lockMs < 3000.0, "no lock");
+            expect (errMs < 3.0, "error " + juce::String (errMs));
+        }
+
+        beginTest ("unrelated audio never locks");
+        {
+            const auto other = makeMusic (sr, 8.0, 99);
+            double lockMs, errMs;
+            run (other, 0.0, 0.0, lockMs, errMs);
+            expect (lockMs < 0.0, "false lock at " + juce::String (lockMs, 0) + " ms");
+        }
+
+        beginTest ("time stretched audio does not lock (so it can be reported, not shown wrong)");
+        {
+            // 8 percent faster, the way a warped clip sounds after a tempo change.
+            std::vector<float> stretched;
+            for (double pos = 10.0 * sr; pos < 18.0 * sr; pos += 1.08)
+            {
+                const auto i = (size_t) pos;
+                const auto frac = (float) (pos - (double) i);
+                stretched.push_back (take[i] * (1.0f - frac) + take[i + 1] * frac);
+            }
+
+            double lockMs, errMs;
+            run (stretched, 0.0, 10.0, lockMs, errMs);
+            logMessage ("stretched: lock " + juce::String (lockMs, 0) + " ms, error " + juce::String (errMs, 1) + " ms");
+            expect (lockMs < 0.0 || errMs > 20.0, "locked and claimed to be accurate on stretched audio");
+        }
+    }
+};
+
+//==============================================================================
+struct TakeHistoryTests : juce::UnitTest
+{
+    TakeHistoryTests() : UnitTest ("Take history", "Griddy") {}
+
+    static TakeHistory::Entry makeTake (TakeHistory& h, int slot)
+    {
+        auto e = h.beginTake (slot, TakeMeta {});
+        e.meta.numFrames = 1;
+        e.meta.durationSeconds = 1.0;
+        e.folder.getChildFile ("frames/000000.jpg").replaceWithText ("x");
+        h.finishTake (e);
+        return e;
+    }
+
+    void runTest() override
+    {
+        const auto root = juce::File::createTempFile ("griddy-history");
+        TakeHistory h (root);
+
+        beginTest ("keep makes a take active and archives the previous one");
+        auto a = makeTake (h, 0);
+        expect (h.inReview (0).has_value());
+        expect (! h.active (0).has_value());
+        expect (h.keep (0, a.meta.takeId));
+        expectEquals ((int) h.active (0)->meta.takeId, (int) a.meta.takeId);
+
+        auto b = makeTake (h, 0);
+        expectEquals ((int) h.playable (0).front().meta.takeId, (int) b.meta.takeId); // review first, so it plays
+        expect (h.keep (0, b.meta.takeId));
+        expectEquals ((int) h.active (0)->meta.takeId, (int) b.meta.takeId);
+        expect (a.folder.isDirectory(), "the previous take must stay on disk");
+
+        beginTest ("retake discards the new take and leaves the active one alone");
+        auto c = makeTake (h, 0);
+        expect (h.retake (0, c.meta.takeId));
+        expect (! c.folder.exists());
+        expectEquals ((int) h.active (0)->meta.takeId, (int) b.meta.takeId);
+        expect (! h.inReview (0).has_value());
+
+        beginTest ("restore swaps an archived take back in");
+        expect (h.restore (0, a.meta.takeId));
+        expectEquals ((int) h.active (0)->meta.takeId, (int) a.meta.takeId);
+
+        beginTest ("the list shows the newest five and never deletes older takes");
+        std::vector<TakeHistory::Entry> many;
+        for (int i = 0; i < 7; ++i)
+        {
+            auto e = makeTake (h, 1);
+            h.keep (1, e.meta.takeId);
+            many.push_back (e);
+        }
+        expectEquals ((int) h.listed (1).size(), 5);
+        expect (many.front().folder.isDirectory(), "oldest take is still on disk");
+
+        beginTest ("a new take over a take in review archives it, and Retake still discards");
+        auto r1 = makeTake (h, 3);
+        auto r2 = makeTake (h, 3);
+        expect (r1.folder.isDirectory(), "the replaced review take stays on disk");
+        expectEquals ((int) h.inReview (3)->meta.takeId, (int) r2.meta.takeId);
+        {
+            const auto l = h.listed (3);
+            expectEquals ((int) l.size(), 2);
+            expect (l[1].meta.takeId == r1.meta.takeId && l[1].meta.state == TakeMeta::State::archived, "the replaced take is archived");
+            const auto p = h.playable (3);
+            expect (p.size() == 2 && p.front().meta.takeId == r2.meta.takeId, "the new take plays; the replaced one is still recognised");
+        }
+        expect (h.restore (3, r1.meta.takeId), "the replaced take can be restored");
+        expectEquals ((int) h.active (3)->meta.takeId, (int) r1.meta.takeId);
+        auto r3 = makeTake (h, 3);
+        expect (h.retake (3, r3.meta.takeId));
+        expect (! r3.folder.exists(), "Retake deletes the new take");
+        expectEquals ((int) h.listed (3).size(), 2);
+
+        beginTest ("the sync recognises up to maxRecognised takes and lists all of them on request");
+        for (int i = 0; i < TakeHistory::maxRecognised + 3; ++i)
+            makeTake (h, 4);
+        expectEquals ((int) h.all (4).size(), TakeHistory::maxRecognised + 3);
+        expectEquals ((int) h.playable (4).size(), TakeHistory::maxRecognised);
+        expectEquals ((int) h.listed (4).size(), TakeHistory::maxListed);
+
+        beginTest ("the sync stops at the minutes cap, and the kept take always plays");
+        {
+            std::vector<TakeHistory::Entry> longTakes;
+            for (int i = 0; i < 6; ++i)
+            {
+                auto e = h.beginTake (5, TakeMeta {});
+                e.meta.numFrames = 1;
+                e.meta.durationSeconds = 8.0 * 60.0;
+                h.finishTake (e);
+                longTakes.push_back (e);
+            }
+            h.keep (5, longTakes.front().meta.takeId);
+            const auto p = h.playable (5);
+            expectEquals ((int) p.size(), 4, "three newest of 8 minutes each fit in 30 minutes, plus the kept take");
+            expect (std::any_of (p.begin(), p.end(), [&] (const TakeHistory::Entry& e) { return e.meta.takeId == longTakes.front().meta.takeId; }));
+        }
+
+        beginTest ("slip is saved with the take");
+        expect (h.setSlip (0, a.meta.takeId, 0.035));
+        expectWithinAbsoluteError (h.active (0)->meta.slipSeconds, 0.035, 1.0e-9);
+
+        beginTest ("slots are independent");
+        expectEquals ((int) h.listed (2).size(), 0);
+
+        root.deleteRecursively();
+    }
+};
+
+//==============================================================================
+struct SyncControllerTests : juce::UnitTest
+{
+    SyncControllerTests() : UnitTest ("Sync controller", "Griddy") {}
+
+    /** A ClipSource a test can set by hand. */
+    struct FakeSource final : ClipSource
+    {
+        SyncKind k;
+        explicit FakeSource (SyncKind kind) : k (kind) {}
+        SyncKind kind() const noexcept override { return k; }
+        void feed (const float*, int, int64_t, bool) noexcept override {}
+        void process() override {}
+        ClipFix latest() const noexcept override { return fix.read(); }
+        void set (ClipFix f) { f.serial = ++n; fix.write (f); }
+        SeqLock<ClipFix> fix;
+        uint32_t n = 0;
+    };
+
+    static TakeProfile profile (int id, double hostStart, double dur)
+    {
+        TakeProfile p;
+        p.takeId = id;
+        p.hostStartSeconds = hostStart;
+        p.durationSeconds = dur;
+        return p;
+    }
+
+    void runTest() override
+    {
+        const double sr = 48000.0;
+        HostClock clock;
+        FakeSource emb (SyncKind::embedded), fp (SyncKind::fingerprint);
+        HostPositionClipSource prior;
+        prior.setSampleRate (sr);
+        SyncController ctl (clock, &emb, &fp, &prior);
+        ctl.setTakes ({ profile (1, 10.0, 8.0) });
+        prior.setTakes ({ { 1, 10.0, 8.0 } });
+
+        float loud[64];
+        for (auto& x : loud) x = 0.3f;
+
+        auto feed = [&] (double hostSec, bool playing)
+        {
+            clock.feed (loud, 64, (int64_t) (hostSec * sr), sr, playing);
+            prior.feed (loud, 64, (int64_t) (hostSec * sr), playing);
+        };
+
+        beginTest ("with no fixes the host position prior places the take");
+        feed (12.0, true);
+        auto t = ctl.update (steadyNowSeconds());
+        expect (t.status == SyncStatus::prior);
+        expectWithinAbsoluteError (t.takeSeconds, 2.0, 0.3);
+
+        beginTest ("a fingerprint fix replaces the prior and moves the clip");
+        {
+            ClipFix f;
+            f.takeId = 1; f.takeSeconds = 5.0; f.hostSeconds = 12.0; f.kind = SyncKind::fingerprint; f.locked = true; f.confidence = 0.9f;
+            fp.set (f);
+            feed (12.0, true);
+            t = ctl.update (steadyNowSeconds());
+            expect (t.status == SyncStatus::locked);
+            expectWithinAbsoluteError (t.takeSeconds, 5.0, 0.3);
+        }
+
+        beginTest ("a single disagreeing fingerprint fix is not believed, a repeated one is");
+        {
+            ClipFix f;
+            f.takeId = 1; f.takeSeconds = 1.0; f.hostSeconds = 12.0; f.kind = SyncKind::fingerprint; f.locked = true;
+            fp.set (f);
+            feed (12.0, true);
+            t = ctl.update (steadyNowSeconds());
+            expectWithinAbsoluteError (t.takeSeconds, 5.0, 0.3);
+
+            fp.set (f);
+            t = ctl.update (steadyNowSeconds());
+            expectWithinAbsoluteError (t.takeSeconds, 1.0, 0.3);
+        }
+
+        beginTest ("an embedded fix wins and is believed at once");
+        {
+            ClipFix f;
+            f.takeId = 1; f.takeSeconds = 3.0; f.hostSeconds = 12.0; f.kind = SyncKind::embedded; f.locked = true;
+            emb.set (f);
+            feed (12.0, true);
+            t = ctl.update (steadyNowSeconds());
+            expectWithinAbsoluteError (t.takeSeconds, 3.0, 0.3);
+            expect (t.kind == SyncKind::embedded);
+        }
+
+        beginTest ("stopping freezes the position; seeking away keeps the clip placement");
+        {
+            feed (12.0, false);
+            t = ctl.update (steadyNowSeconds());
+            expect (t.status == SyncStatus::stopped);
+            const auto frozen = t.takeSeconds;
+            juce::Thread::sleep (50);
+            expectWithinAbsoluteError (ctl.update (steadyNowSeconds()).takeSeconds, frozen, 1.0e-9);
+
+            feed (14.0, false); // seek forward 2 s
+            expectWithinAbsoluteError (ctl.update (steadyNowSeconds()).takeSeconds, frozen + 2.0, 0.01);
+        }
+
+        beginTest ("a loop wrap in the host leaves the placement alone, so the clip repeats with the loop");
+        {
+            feed (13.0, true);
+            const auto before = ctl.update (steadyNowSeconds()).takeSeconds;
+            feed (12.0, true); // loop jumped back one second
+            const auto after = ctl.update (steadyNowSeconds()).takeSeconds;
+            expectWithinAbsoluteError (before - after, 1.0, 0.3);
+        }
+
+        beginTest ("past the end of the take: wraps if sound continues, holds if it stops");
+        {
+            // placement: take 3.0 at host 12.0 => offset -9.0; take is 8.0 long, so host 20.5 is past the end
+            feed (20.5, true);
+            t = ctl.update (steadyNowSeconds());
+            expect (t.predictedWrap == 1);
+            expect (t.takeSeconds >= 0.0 && t.takeSeconds <= 8.0);
+
+            float quiet[64] = {};
+            clock.feed (quiet, 64, (int64_t) (20.5 * sr), sr, true);
+            t = ctl.update (steadyNowSeconds());
+            expect (t.status == SyncStatus::held);
+        }
+    }
+};
+
+struct LiveTimelineTests : juce::UnitTest
+{
+    LiveTimelineTests() : UnitTest ("Live timeline", "Griddy") {}
+
+    static TakeProfile take (int id, double hostStart, double createdAt)
+    {
+        TakeProfile p;
+        p.takeId = id;
+        p.hostStartSeconds = hostStart;
+        p.durationSeconds = 10.0;
+        p.createdAt = createdAt;
+        p.ranges.push_back ({ hostStart, hostStart + 10.0, 0.0 });
+        return p;
+    }
+
+    static TimelineClip clip (int file, double start, double end, double origin, double born = 0.0, bool lane = false)
+    {
+        TimelineClip c;
+        c.file = file;
+        c.hostStart = start;
+        c.hostEnd = end;
+        c.originKnown = true;
+        c.origin = origin;
+        c.fileBorn = born;
+        c.lane = lane;
+        return c;
+    }
+
+    static int32_t takeOf (const std::vector<SyncController::FileBinding>& b, int file)
+    {
+        for (const auto& x : b)
+            if (x.file == file)
+                return x.takeId;
+        return -1;
+    }
+
+    void runTest() override
+    {
+        beginTest ("files bind to the take that started with them");
+        {
+            SlotTimeline tl;
+            tl.clips = { clip (0, 4.0, 6.0, 4.0), clip (1, 6.0, 8.0, 3.0) };
+            const auto b = SyncController::bindFiles (tl, { take (1, 4.1, 0.0), take (2, 3.05, 0.0) });
+            expectEquals ((int) takeOf (b, 0), 1);
+            expectEquals ((int) takeOf (b, 1), 2);
+            for (const auto& x : b)
+                if (x.file == 0)
+                    expectWithinAbsoluteError (x.lead, 0.1, 1.0e-9);
+        }
+
+        beginTest ("takes begun from the same spot are told apart by when the file was created");
+        {
+            SlotTimeline tl;
+            tl.clips = { clip (0, 4.0, 6.0, 4.0, 1000.0), clip (1, 6.0, 8.0, 4.0, 1060.0) };
+            const auto b = SyncController::bindFiles (tl, { take (1, 4.05, 1000.4), take (2, 4.02, 1060.3) });
+            expectEquals ((int) takeOf (b, 0), 1);
+            expectEquals ((int) takeOf (b, 1), 2);
+        }
+
+        beginTest ("with nothing to tell them apart, a file stays unbound and the sound decides");
+        {
+            SlotTimeline tl;
+            tl.clips = { clip (0, 4.0, 6.0, 4.0), clip (1, 6.0, 8.0, 4.0) };
+            const auto b = SyncController::bindFiles (tl, { take (1, 4.05, 0.0), take (2, 4.02, 0.0) });
+            expect (b.empty());
+        }
+
+        beginTest ("a moved clip's file binds through its clip left in a take lane");
+        {
+            SlotTimeline tl;
+            tl.clips = { clip (0, 20.0, 22.0, 16.0), clip (0, 4.0, 14.0, 4.0, 0.0, true) };
+            const auto b = SyncController::bindFiles (tl, { take (1, 4.0, 0.0) });
+            expectEquals ((int) takeOf (b, 0), 1);
+        }
+
+        beginTest ("a film take is its file's video by path, over the take recorded with it");
+        {
+            SlotTimeline tl;
+            tl.files = { "/Live/a.wav", "/Live/b.wav" };
+            tl.clips = { clip (0, 4.0, 6.0, 4.0, 1000.0), clip (1, 6.0, 8.0, 3.0, 1060.0) };
+            auto film = take (7, 40.0, 2000.0);
+            film.filmPath = "/Live/a.wav";
+            film.filmLead = 1.5;
+            film.filmCurrent = true;
+            const auto b = SyncController::bindFiles (tl, { take (1, 4.1, 1000.2), take (2, 3.05, 1060.2), film });
+            expectEquals ((int) takeOf (b, 0), 7);
+            expectEquals ((int) takeOf (b, 1), 2);
+            for (const auto& x : b)
+                if (x.file == 0)
+                {
+                    expect (x.film && x.leadKnown);
+                    expectWithinAbsoluteError (x.lead, 1.5, 1.0e-9);
+                    expectEquals ((int) x.underTakeId, 1);
+                    expectWithinAbsoluteError (x.underLead, 0.1, 1.0e-9);
+                }
+        }
+
+        beginTest ("of several film takes of a file, the kept one wins, else the newest");
+        {
+            SlotTimeline tl;
+            tl.files = { "/Live/a.wav" };
+            tl.clips = { clip (0, 4.0, 6.0, 4.0) };
+            auto older = take (7, 40.0, 2000.0), newer = take (8, 50.0, 3000.0);
+            older.filmPath = newer.filmPath = "/Live/a.wav";
+            expectEquals ((int) takeOf (SyncController::bindFiles (tl, { older, newer }), 0), 8);
+            older.filmCurrent = true;
+            expectEquals ((int) takeOf (SyncController::bindFiles (tl, { older, newer }), 0), 7);
+        }
+
+        beginTest ("a film take follows its file to a new path by name and creation time, and binds nothing else");
+        {
+            SlotTimeline tl;
+            tl.files = { "/Collected/Samples/Recorded/a.wav", "/Live/c.wav" };
+            tl.clips = { clip (0, 4.0, 6.0, 4.0, 1000.0), clip (1, 40.0, 44.0, 40.0, 1000.3) };
+            auto film = take (7, 40.0, 2000.0);
+            film.filmPath = "/Live/a.wav";
+            film.filmBorn = 1000.0;
+            const auto b = SyncController::bindFiles (tl, { film });
+            expectEquals ((int) takeOf (b, 0), 7);
+            expectEquals ((int) takeOf (b, 1), -1); // it started where c's clip is, but a film take never binds by time
+            film.filmBorn = 900.0;
+            expect (SyncController::bindFiles (tl, { film }).empty());
+        }
+
+        beginTest ("film fields: the script's file and take.json");
+        {
+            LiveTimeline t;
+            expect (parseLiveTimeline (R"({"version":1,"written":1.0,"tracks":[{"name":"Hats","slot":"3","files":["/x/a.wav","/x/b.wav"],
+                "film":{"from":2.0,"to":9.5},"clips":[{"start":1.0,"end":3.0,"file":1,"origin":0.5,"selected":true,"bar":2}]}]})", t));
+            expect (t.tracks[0].timeline.files == std::vector<std::string> { "/x/a.wav", "/x/b.wav" });
+            expect (t.tracks[0].filmKnown && t.tracks[0].filmFrom == 2.0 && t.tracks[0].filmTo == 9.5);
+            expect (t.tracks[0].timeline.clips[0].selected && t.tracks[0].timeline.clips[0].bar == 2);
+
+            TakeMeta m;
+            m.filmPath = "/x/b.wav";
+            m.filmBorn = 123.0;
+            m.filmLead = -1.25;
+            const auto back = TakeMeta::fromVar (juce::JSON::parse (juce::JSON::toString (m.toVar())));
+            expect (back.isFilm() && back.filmPath == m.filmPath && back.filmBorn == 123.0 && back.filmLead == -1.25);
+            expect (! TakeMeta::fromVar (juce::JSON::parse (juce::JSON::toString (TakeMeta().toVar()))).isFilm());
+
+            LiveRequest r;
+            r.action = "film";
+            r.from = 3.0;
+            r.to = 7.5;
+            const auto v = juce::JSON::parse (liveRequestsJson ({ r }));
+            const auto& x = v.getProperty ("requests", {}).getArray()->getReference (0);
+            expectEquals ((double) x.getProperty ("from", 0.0), 3.0);
+            expectEquals ((double) x.getProperty ("to", 0.0), 7.5);
+        }
+
+        beginTest ("the script's file parses");
+        {
+            LiveTimeline t;
+            expect (parseLiveTimeline (R"({"version":1,"written":1234.5,"tracks":[{"name":"Vox","slot":"2","audible":true,"arrangement":true,
+                "clips":[{"start":1.0,"end":3.0,"active":true,"file":0,"origin":0.5,"born":99.0},{"start":3.0,"end":4.0,"active":false,"lane":true},
+                {"start":5.0,"end":6.0,"file":1,"origin":null}]}]})", t));
+            expectEquals (t.written, 1234.5);
+            expectEquals ((int) t.tracks.size(), 1);
+            expectEquals (t.tracks[0].slot, 1);
+            expectEquals ((int) t.tracks[0].timeline.clips.size(), 3);
+            expect (t.tracks[0].timeline.clips[0].originKnown && t.tracks[0].timeline.clips[0].fileBorn > 98.0);
+            expect (! t.tracks[0].timeline.clips[1].active && t.tracks[0].timeline.clips[1].lane && t.tracks[0].timeline.clips[1].file == -1);
+            expect (! t.tracks[0].timeline.clips[2].originKnown);
+            expect (! parseLiveTimeline ("{\"version\":2}", t));
+        }
+
+        beginTest ("requests for the Live script: what tests/live_script_test.py reads");
+        {
+            LiveRequest r;
+            r.id = 1700000000123;
+            r.slot = 2;
+            r.track = "Vox";
+            r.action = "record";
+            r.at = 1700000000.5;
+            const auto v = juce::JSON::parse (liveRequestsJson ({ r }));
+            expectEquals ((int) v.getProperty ("version", 0), 1);
+            const auto* list = v.getProperty ("requests", {}).getArray();
+            expect (list != nullptr && list->size() == 1);
+            if (list != nullptr && list->size() == 1)
+            {
+                const auto& x = list->getReference (0);
+                expect ((juce::int64) x.getProperty ("id", 0) == (juce::int64) r.id);
+                expectEquals ((int) x.getProperty ("slot", 0), 3); // 1 based, as Griddy's Slot parameter shows it
+                expectEquals (x.getProperty ("track", {}).toString(), juce::String ("Vox"));
+                expectEquals (x.getProperty ("action", {}).toString(), juce::String ("record"));
+                expectWithinAbsoluteError ((double) x.getProperty ("at", 0.0), 1700000000.5, 1.0e-3);
+            }
+            expect (liveRequestsFile().getParentDirectory() == liveTimelineFile().getParentDirectory());
+        }
+    }
+};
+
+static PrimitiveTests primitiveTests;
+static EmbeddedSyncTests embeddedSyncTests;
+static FingerprintTests fingerprintTests;
+static TakeHistoryTests takeHistoryTests;
+static SyncControllerTests syncControllerTests;
+static LiveTimelineTests liveTimelineTests;
