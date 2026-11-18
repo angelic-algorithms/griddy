@@ -4,8 +4,10 @@
 import { TEMPLATES } from "./kit";
 
 type Listener = (payload: unknown) => void;
-type Take = { id: number; state: "kept" | "review" | "archived"; seconds: number; slip: number; hasMov: boolean; startPpq: number; bpm: number; timeSig: string; fps: number; latencyMs: number; recognised?: boolean; heard?: string; noSound?: boolean };
-type MockSlot = { claimed: boolean; name: string; armed: boolean; liveArmed?: boolean; recording: boolean; recordStartPpq: number; takes: Take[]; playingTake?: number; gap?: boolean };
+type Take = { id: number; state: "kept" | "review" | "archived"; seconds: number; slip: number; hasMov: boolean; startPpq: number; bpm: number; timeSig: string; fps: number; latencyMs: number; recognised?: boolean; heard?: string; noSound?: boolean; filmFor?: string };
+type MockSlot = { claimed: boolean; name: string; armed: boolean; liveArmed?: boolean; recording: boolean; recordStartPpq: number; takes: Take[]; playingTake?: number; gap?: boolean; filming?: boolean };
+// A recording on my track in Live's arrangement, for Film: its clip from startPpq to endPpq.
+type MockRecording = { file: number; name: string; lane: boolean; startPpq: number; endPpq: number; loops: boolean; video: "filmed" | "video" | "none" };
 type ExportState = "idle" | "waiting" | "recording" | "writing" | "done" | "failed";
 type Store<T> = { get: () => T; set: (v: T) => void; subscribe: (fn: () => void) => () => void };
 
@@ -41,6 +43,9 @@ export const MOCK_SCENARIOS: MockScenario[] = [
   { id: "armed-recording", label: "Armed, Live recording" },
   { id: "not-armed", label: "Track not armed in Live" },
   { id: "no-script", label: "No Live script" },
+  { id: "film-chosen", label: "Film: clip clicked in Live" },
+  { id: "film-lane", label: "Film: take lane clip clicked" },
+  { id: "film-none", label: "Film: no clip clicked" },
   { id: "countin", label: "Count in" },
   { id: "disarmed", label: "Disarmed after take" },
   { id: "recording", label: "Recording" },
@@ -117,6 +122,10 @@ export function createMock() {
   let lastError = "";
   let starting = false;
   let nextId = 20;
+  // Film: my track's recordings, the clip clicked in Live (-1 for none), and a Film press waiting or filming.
+  let recordings: MockRecording[] = [];
+  let selectedFile = -1;
+  let film: { file: number; filming: boolean } | undefined;
 
   const emptySlot = (): MockSlot => ({ claimed: false, name: "", armed: false, recording: false, recordStartPpq: 0, takes: [] });
   const ppqNow = () => (playing ? ((performance.now() - start) / 1000) * 2 - countInBeats : 0);
@@ -138,6 +147,9 @@ export function createMock() {
     blocked = false;
     lastError = "";
     starting = false;
+    recordings = [];
+    selectedFile = -1;
+    film = undefined;
     masterParam()?.set(false);
     slotParam()?.set(1);
     armParam()?.set(false);
@@ -172,6 +184,22 @@ export function createMock() {
         liveScript = false;
         claim(0, { takes: [take(1, "kept", 0)] });
         claim(1, { takes: [take(2, "kept", 0)] });
+        playing = false;
+        start = performance.now();
+        break;
+      case "film-chosen":
+      case "film-lane":
+      case "film-none":
+        // Drums laid down one piece at a time: the kick has its video, the hats and the snare have none yet.
+        claim(0, { name: "Hats", takes: [take(5, "kept", 0)] });
+        claim(1, { name: "Kick", takes: [take(6, "kept", 0)] });
+        recordings = [
+          { file: 0, name: "Hats 0001", lane: false, startPpq: 8, endPpq: 24, loops: false, video: "video" },
+          { file: 1, name: "Hats 0002", lane: false, startPpq: 24, endPpq: 40, loops: false, video: "none" },
+          { file: 2, name: "Hats 0003", lane: true, startPpq: 8, endPpq: 24, loops: false, video: "none" },
+          { file: 3, name: "Hats loop", lane: false, startPpq: 40, endPpq: 72, loops: true, video: "none" },
+        ];
+        selectedFile = id === "film-chosen" ? 1 : id === "film-lane" ? 2 : -1;
         playing = false;
         start = performance.now();
         break;
@@ -315,6 +343,34 @@ export function createMock() {
             }, 120);
             return true;
           }
+          case "requestFilm": {
+            // What Hub::requestFilm says, and what the script then does: play from a bar before the clip, record nothing.
+            const me = own();
+            const [file] = args as [number];
+            const r = recordings.find((x) => x.file === (file < 0 ? selectedFile : file));
+            if (!liveScript || me < 0) return "Film needs the Griddy control surface in Live.";
+            if (film || slots[me].recording) return "This slot is already recording.";
+            if (!r) return file < 0 ? "Click an audio clip on this track in Live first." : "That recording has no clip in the arrangement now.";
+            if (r.loops) return "This clip loops past its loop end, so Griddy cannot tell where its recording starts. Film a clip that does not loop.";
+            film = { file: r.file, filming: false };
+            setTimeout(() => {
+              liveRecording = false;
+              slots[me].liveArmed = false;
+              playing = true;
+              start = performance.now() - ((r.startPpq - 4) / 2) * 1000;
+              emit("status", status());
+            }, 120);
+            return "";
+          }
+          case "stopFilm": {
+            if (!film) return false;
+            const me = own();
+            if (slots[me]?.recording) finishTake(me);
+            film = undefined;
+            playing = false;
+            setTimeout(() => emit("status", status()), 0);
+            return true;
+          }
           case "keepTake":
           case "restoreTake": {
             const [slot, id] = args as [number, number];
@@ -410,9 +466,28 @@ export function createMock() {
   function finishTake(slot: number) {
     const x = slots[slot];
     x.recording = false;
+    const r = x.filming && film ? recordings.find((y) => y.file === film!.file) : undefined;
+    x.filming = false;
+    if (r) {
+      r.video = "filmed";
+      film = undefined;
+    }
     // A take still in review is archived, not dropped: Live keeps the replaced recording, so its video stays.
-    x.takes = [take(nextId++, "review", x.recordStartPpq, Math.max(1, (ppqNow() - x.recordStartPpq) / 2)),
+    x.takes = [{ ...take(nextId++, "review", x.recordStartPpq, Math.max(1, (ppqNow() - x.recordStartPpq) / 2)), filmFor: r?.name },
       ...x.takes.map((t) => (t.state === "review" ? { ...t, state: "archived" as const } : t))];
+  }
+
+  function filmVar(me: number) {
+    const shown = (r: MockRecording) => ({ file: r.file, name: r.name, lane: r.lane, start: r.startPpq / 2, loops: r.loops, video: r.video, bar: Math.floor(r.startPpq / 4) + 1 });
+    const chosen = recordings.find((r) => r.file === selectedFile);
+    return {
+      available: liveScript && me >= 0,
+      armed: !!film,
+      filming: !!film?.filming,
+      name: film ? recordings.find((r) => r.file === film!.file)?.name : undefined,
+      selected: chosen ? shown(chosen) : undefined,
+      recordings: recordings.map(shown),
+    };
   }
 
   function engineStatus() {
@@ -425,8 +500,20 @@ export function createMock() {
         const want = !!slots[me].liveArmed && liveRecording;
         if (armParam()?.get() !== want) armParam()?.set(want);
       }
+      // Film: filming while Live plays the clip, until its end, when the script stops Live.
+      if (film) {
+        const r = recordings.find((x) => x.file === film!.file)!;
+        if (!film.filming && playing && ppqNow() >= r.startPpq - 4) {
+          film.filming = true;
+          slots[me].recording = slots[me].filming = true;
+          slots[me].recordStartPpq = ppqNow();
+        } else if (film.filming && (!playing || ppqNow() >= r.endPpq)) {
+          finishTake(me);
+          playing = false;
+        }
+      }
       // The one rule, as in the hub: armed plus play records. Without the script, the take ends the arm.
-      if (slots[me].recording && (!armParam()?.get() || !playing)) {
+      if (slots[me].recording && !slots[me].filming && (!armParam()?.get() || !playing)) {
         finishTake(me);
         if (!liveScript) armParam()?.set(false);
       }
@@ -442,13 +529,13 @@ export function createMock() {
     const recording = me >= 0 && !!slots[me]?.recording;
     return {
       session, sessionFolder: `${outputFolder}/Sessions/${session}`, takesBytes: 412_000_000, slot: Math.max(0, me), instances: slots.filter((x) => x.claimed).length + (me < 0 ? 1 : 0),
-      recording, armed: me >= 0 && !!slots[me]?.armed, master: me < 0, error: "", liveScript,
+      recording, armed: me >= 0 && !!slots[me]?.armed, master: me < 0, error: "", liveScript, film: filmVar(me),
       recordHint: me >= 0 && slots[me]?.armed && !slots[me]?.recording && !playing ? `Armed. Press play in Live to record slot ${me + 1}.` : "",
       claimedMask: slots.reduce((m, x, i) => (x.claimed ? m | (1 << i) : m), 0),
       slots: slots.slice(0, panels).map((x, slot) => ({
         slot, claimed: x.claimed, recording: x.recording, status: !x.takes.some((t) => t.state === "kept") ? "noTake" : x.claimed ? "locked" : "prior",
         source: !x.takes.length ? "none" : x.claimed ? "fingerprint" : "hostPosition", takeId: x.playingTake ?? x.takes.find((t) => t.state === "kept")?.id ?? -1, gap: !!x.gap, warp: false, lockMs: 180,
-        recordStartPpq: x.recordStartPpq, trackName: x.name, armed: x.armed, liveArmed: !!x.liveArmed, review: x.takes.some((t) => t.state === "review"),
+        recordStartPpq: x.recordStartPpq, trackName: x.name, armed: x.armed, liveArmed: !!x.liveArmed, review: x.takes.some((t) => t.state === "review"), filming: !!x.filming,
       })),
       takes: slots.slice(0, panels).map((x) => x.takes),
       layout: layoutVar(),

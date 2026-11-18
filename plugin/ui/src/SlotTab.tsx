@@ -1,6 +1,6 @@
 // The inspector's Slot tab: the target slot, its track and camera, Keep and Retake, trim and slip, its takes.
 import { useEffect, useState } from "react";
-import { api, Device, EngineStatus, params, SlotInfo, TakeInfo } from "./bridge";
+import { api, Device, EngineStatus, FilmRecording, params, SlotInfo, TakeInfo } from "./bridge";
 import { useParam } from "./hooks";
 import { Btn, C, fmtFrames, fmtMs, Label, Sticker } from "./kit";
 import { FOLLOWS_POSITION, SlotView } from "./model";
@@ -68,6 +68,7 @@ function TakeRow({ slot, take, playing, track, onKeep, onRetake }: { slot: numbe
       {take.recognised === false && <span className="small-note">Too old to follow comps</span>}
       {take.noSound && <span className="error-line" role="note">No sound recorded. Live sent this track silence while recording, so this take can't be told apart in a comp. Set the track's Monitor to Auto or In.</span>}
       {!!take.heard && take.heard !== track && <span className="small-note">This take listened to {take.heard}. It follows edits on that track.</span>}
+      {!!take.filmFor && <span className="small-note">Filmed for {take.filmFor}. It shows wherever that recording plays.</span>}
       <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
         {take.state === "review" && (
           <>
@@ -89,6 +90,34 @@ function TakeRow({ slot, take, playing, track, onKeep, onRetake }: { slot: numbe
 }
 
 /** Which camera fills a slot, as camera pads. Clicking the camera that is on turns it off. */
+const videoWords: Record<FilmRecording["video"], string> = { filmed: "FILMED", video: "VIDEO", none: "NO VIDEO" };
+const videoColor: Record<FilmRecording["video"], string> = { filmed: C.sky, video: C.lime, none: "#d8d6cc" };
+
+/** The track's recordings in Live, each with whether a video shows for it, and Film. */
+function Recordings({ list, busy, onFilm }: { list: FilmRecording[]; busy: boolean; onFilm: (file: number) => void }) {
+  return (
+    <div>
+      <Label>Recordings on this track</Label>
+      <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
+        {list.map((r) => (
+          <li key={r.file} className="take-row row" style={{ gap: 8 }}>
+            <span style={{ fontWeight: 800, fontSize: 14, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0, flex: 1 }} title={r.name}>{r.name}</span>
+            {r.start !== undefined && <span className="small-note num">{seconds(r.start)}</span>}
+            {r.lane && <span className="small-note">take lane</span>}
+            <span style={{ fontWeight: 800, fontSize: 11, textTransform: "uppercase", padding: "2px 5px", lineHeight: 1, border: "2px solid #000", background: videoColor[r.video] }}>
+              {videoWords[r.video]}
+            </span>
+            <Btn small color="sky" disabled={busy || r.loops} onClick={() => onFilm(r.file)}
+              title={r.loops ? "This clip loops past its loop end, so Griddy can't tell where its recording starts" : `Film a video for ${r.name}. Live plays it and records no sound`}>
+              Film
+            </Btn>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 function CameraPicker({ slot, camerasAllowed }: { slot: number; camerasAllowed: boolean }) {
   const [devices, setDevices] = useState<Device[]>([]);
   const [sources, setSources] = useState<string[]>([]);
@@ -144,7 +173,7 @@ function SlotPicker({ views }: { views: SlotView[] }) {
   );
 }
 
-export function SlotTab({ engine, views, slot, camerasAllowed, onKeep, onRetake, onReset }: {
+export function SlotTab({ engine, views, slot, camerasAllowed, onKeep, onRetake, onReset, onFilm }: {
   engine: EngineStatus;
   views: SlotView[];
   slot: number;
@@ -152,6 +181,7 @@ export function SlotTab({ engine, views, slot, camerasAllowed, onKeep, onRetake,
   onKeep: (slot: number) => void;
   onRetake: (slot: number) => void;
   onReset: (slot: number) => void;
+  onFilm: (file: number) => void;
 }) {
   const [showAll, setShowAll] = useState(false);
   const v = views[slot];
@@ -215,6 +245,10 @@ export function SlotTab({ engine, views, slot, camerasAllowed, onKeep, onRetake,
         <div style={{ alignSelf: "flex-start" }}>
           <ResetSlot slot={slot} pending={engine.resetPending && v.mine} label="Clear this slot" onDone={() => onReset(slot)} />
         </div>
+      )}
+
+      {v.mine && engine.film?.available && !!engine.film.recordings?.length && (
+        <Recordings list={engine.film.recordings} busy={engine.film.armed || engine.film.filming} onFilm={onFilm} />
       )}
 
       <div>

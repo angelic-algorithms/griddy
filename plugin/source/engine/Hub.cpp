@@ -1744,6 +1744,8 @@ juce::var Hub::takesToVar (int slot) const
         o->setProperty ("hasMov", e.folder.getChildFile ("take.mov").existsAsFile());
         o->setProperty ("heard", e.meta.trackName);
         o->setProperty ("noSound", heardNothing (e.meta));
+        if (e.meta.isFilm())
+            o->setProperty ("filmFor", e.meta.filmPath.fromLastOccurrenceOf ("/", false, false).upToLastOccurrenceOf (".", false, false));
         list.add (juce::var (o.release()));
     }
 

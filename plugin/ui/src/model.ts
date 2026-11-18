@@ -87,7 +87,7 @@ export function playingChip(v: SlotView): { text: string; label: string } | unde
 /** The status badge, in the mockup's words and colours. */
 export function badgeFor(v: SlotView, density: "full" | "compact" | "tiny"): Badge {
   let b: Badge = { t: "EMPTY", bg: "#3a3a42", fg: "#d8d6cc" };
-  if (v.recording) b = { t: "● REC", bg: C.blood, fg: "#fff" };
+  if (v.recording) b = { t: v.info?.filming ? "● FILM" : "● REC", bg: C.blood, fg: "#fff" };
   else if (v.waiting) b = { t: "GET READY", bg: C.gold, fg: C.ink };
   else if (v.review) b = { t: "REVIEW", bg: C.gold, fg: C.ink };
   else if (v.live) b = { t: "ARMED · LIVE", bg: C.hot, fg: C.ink };

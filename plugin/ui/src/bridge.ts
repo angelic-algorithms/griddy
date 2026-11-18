@@ -60,6 +60,35 @@ export type TakeInfo = {
   heard?: string;
   /** The take recorded no sound (Live's Monitor was off), so it cannot be told apart in a comp. */
   noSound?: boolean;
+  /** A film take: the recording it was filmed for, by file name. */
+  filmFor?: string;
+};
+
+/** One recorded file on this track's arrangement, for Film. */
+export type FilmRecording = {
+  file: number;
+  name: string;
+  /** Only on a take lane. */
+  lane: boolean;
+  start?: number;
+  /** Its clip loops past its loop end: Griddy cannot tell where the recording starts, so it cannot be filmed. */
+  loops: boolean;
+  /** "filmed": a film take shows for it; "video": the take recorded with it; "none": no video. */
+  video: "filmed" | "video" | "none";
+  bar?: number;
+};
+
+/** Film: a video for a recording already in Live, filmed while Live plays it. Needs the Live script. */
+export type FilmStatus = {
+  available: boolean;
+  /** Film was pressed: Griddy waits for Live to play the clip, then films it. */
+  armed: boolean;
+  filming: boolean;
+  /** What Film films for, while armed or filming. */
+  name?: string;
+  /** The clip clicked in Live, when it is on this track. */
+  selected?: FilmRecording;
+  recordings?: FilmRecording[];
 };
 
 export type SlotInfo = {
@@ -81,6 +110,8 @@ export type SlotInfo = {
   review?: boolean;
   /** No clip plays here: the picture is black. */
   gap?: boolean;
+  /** Recording a film take. */
+  filming?: boolean;
 };
 
 /** One cell of the picture, 0..1 of the canvas, frame included. */
@@ -124,6 +155,7 @@ export type EngineStatus = {
   hostRecording?: boolean;
   /** The Live script runs: Live owns this track's arm, and REC and Arm ask Live through requestInLive. */
   liveScript?: boolean;
+  film?: FilmStatus;
   claimedMask?: number;
   master: boolean;
   error: string;
@@ -175,6 +207,9 @@ export const api = {
   chooseOutputFolder: native<string>("chooseOutputFolder"),
   /** A press of REC or Arm, for the Live script to do in Live. False when the script does not run. */
   requestInLive: native<boolean>("requestInLive") as (action: "record" | "stop" | "arm" | "disarm") => Promise<boolean>,
+  /** Film for a recording on this track: file is its number, or -1 for the clip clicked in Live. Returns why not, or "". */
+  requestFilm: native<string>("requestFilm") as (file: number) => Promise<string>,
+  stopFilm: native<boolean>("stopFilm") as () => Promise<boolean>,
   keepTake: native<boolean>("keepTake") as (slot: number, id: number) => Promise<boolean>,
   retakeTake: native<boolean>("retakeTake") as (slot: number, id: number) => Promise<boolean>,
   restoreTake: native<boolean>("restoreTake") as (slot: number, id: number) => Promise<boolean>,

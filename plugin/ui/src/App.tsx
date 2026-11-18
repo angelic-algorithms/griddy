@@ -72,7 +72,8 @@ export function App() {
 
   // A take ends the arm (one take per arm). Say so, so the next play playing back is no surprise.
   const wasRecording = useRef(false);
-  const ownRecording = own >= 0 && !!engine?.recording;
+  // A film take arms nothing, so it has no arm to end.
+  const ownRecording = own >= 0 && !!engine?.recording && !engine?.film?.filming;
   useEffect(() => {
     if (wasRecording.current && !ownRecording) {
       const t = setTimeout(() => {
@@ -128,7 +129,8 @@ export function App() {
   });
 
   const ownView = own >= 0 ? views[own] : undefined;
-  const isRec = !!ownView && (ownView.recording || ownView.waiting);
+  // A film take is not a recording in Live: REC keeps saying what Live's record does, and Film shows the filming.
+  const isRec = !!ownView && (ownView.recording || ownView.waiting) && !ownView.info?.filming;
   const liveScript = !!engine?.liveScript;
   const liveArmed = !!ownView?.info?.liveArmed;
 
@@ -170,6 +172,19 @@ export function App() {
     else void ask("record");
   };
   const pressArm = () => void ask(armDown ? "disarm" : "arm");
+
+  // Film: a video for a recording already in Live. Live plays it from a bar before and records nothing.
+  const film = engine?.film;
+  const filmOn = !!film?.armed || !!film?.filming;
+  const pressFilm = async (file = -1) => {
+    if (filmOn) {
+      await api.stopFilm();
+      return;
+    }
+    const why = await api.requestFilm(file);
+    if (why) say(why);
+  };
+  const filmFor = film?.selected;
 
   // The hint can be true for one status update between Live's record and play; show it only once it holds.
   const hint = engine?.recordHint ?? "";
@@ -216,6 +231,12 @@ export function App() {
               {recDown ? "● Stop rec" : "● Rec"}
             </Btn>
           )}
+          {!master && engine && liveScript && film?.available && (filmFor || filmOn) && (
+            <Btn color="sky" onClick={() => void pressFilm()} pressed={filmOn} className={filmOn ? "rec-pulse" : ""}
+              title={filmOn ? "Stop filming, and stop Live" : `Film a video for ${filmFor?.name}. Live plays it from a bar before and records no sound`}>
+              {filmOn ? "■ Stop film" : "● Film"}
+            </Btn>
+          )}
           {showLoop && (
             <Btn small color={transport.looping ? "hot" : "ink"} pressed={!!transport.looping} disabled title="Live's loop. Use Live's transport">Loop</Btn>
           )}
@@ -247,6 +268,14 @@ export function App() {
           )}
           <div className="chips-row">
             {!!shownHint && <span className="chip-dark" role="status">{shownHint}</span>}
+            {!master && filmOn && !!film?.name && <span className="chip-dark" role="status">Filming for {film.name}</span>}
+            {!master && !filmOn && filmFor && (
+              <span className="chip-dark" role="status" title={filmFor.name}>
+                Film for: {ownView?.name ?? "this track"}, bar {filmFor.bar ?? 1}{filmFor.lane ? ", take lane" : ""}
+                {filmFor.video !== "none" ? (filmFor.video === "filmed" ? " · filmed" : " · has video") : ""}
+              </span>
+            )}
+            {!master && filmFor?.lane && <span className="chip-dark" role="note">Audition this lane (T) to hear it</span>}
             {latency !== undefined && Math.round(latency) !== 0 && (
               <span className="chip-dark" title="The camera's delay Griddy took off this take, before your slip">
                 Latency comp auto · {latency < 0 ? "−" : "+"}{Math.abs(latency).toFixed(1)} ms
@@ -280,7 +309,7 @@ export function App() {
               {!engine && <p className="msg">Waiting for Griddy's engine.</p>}
               {engine && tab === "slot" && (
                 <SlotTab engine={engine} views={views} slot={sel} camerasAllowed={status.camerasAllowed}
-                  onKeep={keep} onRetake={retake} onReset={(s) => say(`Slot ${s + 1} reset`)} />
+                  onKeep={keep} onRetake={retake} onReset={(s) => say(`Slot ${s + 1} reset`)} onFilm={(f) => void pressFilm(f)} />
               )}
               {engine && tab === "look" && <LookTab engine={engine} say={say} />}
               {engine && tab === "audio" && <AudioTab views={views} transport={transport} />}
