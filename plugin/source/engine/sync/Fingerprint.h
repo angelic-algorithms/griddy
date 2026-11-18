@@ -154,6 +154,8 @@ public:
     void setLight (bool on) noexcept { light = on; }
 
     ClipFix aligned() const noexcept override { return alignedFix.read(); }
+    AudioMatch audioMatch() const noexcept override { return match.read(); }
+    void setShown (int32_t takeId, double offset) noexcept override { shown.write ({ takeId, offset }); }
 
     /** Seconds of sync worker time spent on aligned detection, for the benchmark. */
     double alignedCpuSeconds() const noexcept { return alignedCpu.load(); }
@@ -204,6 +206,11 @@ private:
     std::vector<AlignedCandidate> candidates;
     SeqLock<ClipFix> alignedFix;
     uint32_t alignedSerial = 0;
+    SeqLock<AudioMatch> match;
+    struct Shown { int32_t takeId = -1; double offset = 0.0; };
+    SeqLock<Shown> shown;
+    uint32_t matchSerial = 0;
+    void publishMatch (bool heard, float corr) noexcept;
     std::atomic<bool> alignedOn { true }, light { false };
     std::atomic<double> alignedCpu { 0.0 };
     int64_t lastAlignedAt = 0;   // 8 kHz sample count at the last window

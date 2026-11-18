@@ -64,6 +64,10 @@ struct TakeProfile
     /** Where the take sat on the host timeline: one range per recorded pass. */
     struct Range { double hostStart = 0.0, hostEnd = 0.0, takeAtHostStart = 0.0; };
     std::vector<Range> ranges;
+
+    /** False when the take recorded no sound (Live's Monitor was off): it can never match, so it never goes black
+        for not matching. */
+    bool hasSound = true;
 };
 
 /** Per slot: combines the three sources into one steady answer.
@@ -147,6 +151,10 @@ private:
     double alignedOffset = 0.0;
     double digitalSilentSince = -1.0, signalSince = -1.0;
     bool inGap = false;
+    uint32_t lastMatchSerial = 0;
+    bool matchedNow = false;      // the last check that heard something found a take playing where it was recorded
+    double mismatchSince = -1.0;  // wall time sound began matching no take
+    double movedMatchAt = -1.0;   // wall time of the last fingerprint lock on a take away from where it was recorded
     int32_t loggedTake = -1;
     int16_t loggedPass = -1;
     SpscRing<TakeChange> changes { 256 };

@@ -150,6 +150,7 @@ void PlaybackEngine::reloadSlot (int slot)
         p.durationSeconds = e.meta.durationSeconds;
         p.recordedBpm = e.meta.bpm;
         p.envelope = std::make_shared<const std::vector<float>> (e.meta.envelope);
+        p.hasSound = std::any_of (e.meta.envelope.begin(), e.meta.envelope.end(), [] (float v) { return v >= 1.0e-4f; });
 
         // Every recorded pass of the take, where it sat on the host timeline: what comp detection compares against.
         const auto pieces = e.meta.pieces();

@@ -32,6 +32,16 @@ struct ClipFix
     uint32_t serial = 0; // changes whenever a new fix is published
 };
 
+/** Whether the slot's sound, at the last check, is one of its takes playing where it was recorded. A clip plays the
+    take's own recording, so it matches closely even where it is quiet; a deleted or deactivated stretch, or a mic
+    monitored through the track, matches no take. */
+struct AudioMatch
+{
+    uint32_t serial = 0; // changes with every check
+    float corr = 0.0f;   // best correlation of the last 100 ms with any take at its recorded position
+    uint8_t heard = 0;   // 0: too quiet to say anything
+};
+
 /** Something that can work out where in a take the audio of one slot currently is.
 
     feed() is called from the audio thread: it must copy the samples into a lock free ring
@@ -57,6 +67,13 @@ public:
     /** Any thread. Which of several takes recorded over this host position is playing, judged at the position each
         was recorded (a comp). Unlocked when fewer than two takes cover the position or nothing is clear. */
     virtual ClipFix aligned() const noexcept { return {}; }
+
+    /** Any thread. See AudioMatch. */
+    virtual AudioMatch audioMatch() const noexcept { return {}; }
+
+    /** Any thread: the take and offset (take seconds minus host seconds) the picture shows now, so the match also
+        checks the sound against what is shown, wherever the clip was moved or duplicated. takeId -1: nothing. */
+    virtual void setShown (int32_t takeId, double offset) noexcept { (void) takeId; (void) offset; }
 };
 
 } // namespace griddy

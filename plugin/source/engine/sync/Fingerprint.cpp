@@ -544,6 +544,15 @@ double FingerprintClipSource::hostSecondsOfNewest() const
     return -1.0;
 }
 
+void FingerprintClipSource::publishMatch (bool heard, float corr) noexcept
+{
+    AudioMatch m;
+    m.serial = ++matchSerial;
+    m.heard = heard ? 1 : 0;
+    m.corr = corr;
+    match.write (m);
+}
+
 void FingerprintClipSource::evaluateAligned()
 {
     // Several takes recorded over the same stretch of the timeline (Live's take lanes keep each one where it was
@@ -573,7 +582,7 @@ void FingerprintClipSource::evaluateAligned()
     const auto& live = analyzer.recent8k();
     const auto host = hostSecondsOfNewest();
 
-    if (candidates.size() < 2 || contiguous8k < 160 || (int) live.size() < window || host < 0.0)
+    if (candidates.empty() || contiguous8k < 160 || (int) live.size() < window || host < 0.0)
     {
         unlock();
         winner = challenger = -1;
@@ -599,6 +608,7 @@ void FingerprintClipSource::evaluateAligned()
     // the next sound is judged afresh rather than against the take before it.
     if (length < 160 || ea / (length / step) < 1.0e-8)
     {
+        publishMatch (false, 0.0f);
         if (++silentWindows >= 6)
         {
             winner = challenger = -1;
@@ -652,6 +662,69 @@ void FingerprintClipSource::evaluateAligned()
 
         if (best > -2.0f)
             scores.push_back ({ i, best, bestD, t + (double) (lag + bestD) / analysisRate });
+    }
+
+    // Does any take play here at all? The comp search looks only a few samples around the expected lag, so before
+    // calling it "no take" look wider (20 ms either way) at the takes recorded here: the host's latency may not be
+    // learned yet.
+    {
+        float best = -1.0f;
+        for (const auto& sc : scores)
+            best = std::max (best, sc.corr);
+
+        if (best < poorCorr)
+        {
+            constexpr int wide = 160, wideStep = 4;
+            double eaw = 0.0;
+            for (int i = 0; i < length; i += wideStep)
+                eaw += (double) L[i] * L[i];
+
+            // Best correlation of the window with ref ending around refEnd, 20 ms either way.
+            auto around = [&] (const std::vector<int16_t>& ref, int64_t refEnd)
+            {
+                float b = -1.0f;
+                for (int d = -wide; d <= wide; ++d)
+                {
+                    const auto start = refEnd + d - length;
+                    if (start < 0 || start + length > (int64_t) ref.size())
+                        continue;
+                    const auto* R = ref.data() + start;
+                    double num = 0.0, eb = 0.0;
+                    for (int i = 0; i < length; i += wideStep)
+                    {
+                        const auto x = (double) R[i];
+                        num += (double) L[i] * x;
+                        eb += x * x;
+                    }
+                    b = std::max (b, (float) (num / std::sqrt (eaw * eb + 1.0e-6)));
+                }
+                return b;
+            };
+
+            for (size_t k = 0; k < scores.size() && k < 4; ++k)
+            {
+                const auto& c = candidates[(size_t) scores[k].index];
+                const auto t = c.takeAtHostStart + (host - c.hostStart) + latencyDelta;
+                best = std::max (best, around (c.index->audio8k, (int64_t) std::llround (t * analysisRate) + lag));
+            }
+
+            // What the picture shows now: a moved, duplicated or looped clip plays its take away from where it was
+            // recorded. Past the take's end the sync assumes the clip repeats, so wrap the same way.
+            const auto sh = shown.read();
+            for (const auto& c : candidates)
+            {
+                if (sh.takeId < 0 || c.takeId != sh.takeId || c.index == nullptr || c.index->audio8k.empty())
+                    continue;
+                const auto duration = (double) c.index->audio8k.size() / analysisRate;
+                auto t = host + sh.offset;
+                if (t >= duration)
+                    t = std::fmod (t, duration);
+                best = std::max (best, around (c.index->audio8k, (int64_t) std::llround (t * analysisRate)));
+                break;
+            }
+        }
+
+        publishMatch (true, std::max (best, 0.0f));
     }
 
     if (scores.size() < 2)

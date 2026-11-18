@@ -267,6 +267,18 @@ SlotTarget SyncController::update (double wallNow)
                 if (accept (f, lookup (f.takeId, false), hostNow) && lockLatency < 0.0 && firstAudioWall >= 0.0)
                     lockLatency = wallNow - firstAudioWall;
 
+            if (f.locked)
+                if (const auto* t = lookup (f.takeId, false); t != nullptr)
+                {
+                    bool atRecorded = false;
+                    for (const auto& r : t->ranges)
+                        if (f.hostSeconds >= r.hostStart && f.hostSeconds < r.hostEnd
+                            && std::abs ((f.takeSeconds - f.hostSeconds) - (r.takeAtHostStart - r.hostStart)) < 0.05)
+                            atRecorded = true;
+                    if (! atRecorded)
+                        movedMatchAt = wallNow;
+                }
+
             if (! f.locked && hs.playing)
             {
                 if (! lost)
@@ -317,8 +329,44 @@ SlotTarget SyncController::update (double wallNow)
     const auto gapsOn = comp && hs.playing && gapsAllowed.load (std::memory_order_relaxed);
     const auto longSilence = gapsOn && digitalSilentSince >= 0.0 && wallNow - digitalSilentSince >= gapAfter;
 
-    // A gap ends once sound has lasted gapLeave, which is also long enough for comp detection to say whose sound it is.
-    const auto stayInGap = inGap && gapsOn && signalSince >= 0.0 && wallNow - signalSince < gapLeave;
+    // Sound that is no take playing where it was recorded: a deleted or deactivated stretch with the mic monitored
+    // through the track, or room sound. Only judged where every take recorded here has sound of its own.
+    if (fingerprint != nullptr)
+    {
+        const auto m = fingerprint->audioMatch();
+        if (m.serial != lastMatchSerial)
+        {
+            lastMatchSerial = m.serial;
+            if (m.heard && m.corr >= 0.5f)
+            {
+                matchedNow = true;
+                mismatchSince = -1.0;
+            }
+            else if (m.heard && m.corr < 0.3f)
+            {
+                matchedNow = false;
+                if (mismatchSince < 0.0)
+                    mismatchSince = wallNow;
+            }
+        }
+    }
+    if (! hs.playing)
+        mismatchSince = -1.0;
+
+    bool soundless = false;
+    for (const auto& t : localTakes)
+        for (const auto& r : t.ranges)
+            soundless = soundless || (! t.hasSound && hostNow >= r.hostStart && hostNow < r.hostEnd);
+
+    const auto movedMatch = movedMatchAt >= 0.0 && wallNow - movedMatchAt < 0.6;
+    const auto judgeMatch = gapsOn && ! soundless;
+    const auto longMismatch = judgeMatch && ! movedMatch && mismatchSince >= 0.0 && wallNow - mismatchSince >= gapAfter;
+
+    // A gap ends once sound has lasted gapLeave, which is also long enough for comp detection to say whose sound it is,
+    // and, where takes are judged by their sound, once that sound is a take.
+    const auto stayInGap = inGap && gapsOn
+                        && (digitalSilentSince >= 0.0 || (signalSince >= 0.0 && wallNow - signalSince < gapLeave)
+                            || (judgeMatch && ! matchedNow && ! movedMatch));
 
     if (! placement.valid)
     {
@@ -326,11 +374,16 @@ SlotTarget SyncController::update (double wallNow)
         out.status = hs.playing ? SyncStatus::held : SyncStatus::stopped;
         out.kind = SyncKind::none;
 
-        // Nothing placed yet: digital silence means no clip plays.
-        const auto gapNow = longSilence || stayInGap;
+        if (fingerprint != nullptr)
+            fingerprint->setShown (-1, 0.0);
+
+        // Nothing placed yet: digital silence, or sound that is no take, means no clip plays.
+        const auto gapNow = longSilence || longMismatch || stayInGap;
         if (gapNow != inGap)
         {
             inGap = gapNow;
+            if (gapNow)
+                matchedNow = false; // leaving the gap needs fresh evidence that a take plays
             note (gapNow ? TakeChange::gapStart : TakeChange::gapEnd, loggedTake, loggedPass, -1, -1, hostNow);
             loggedTake = -1;
             loggedPass = -1;
@@ -389,11 +442,13 @@ SlotTarget SyncController::update (double wallNow)
     // clip at all is digital silence. So digital silence for gapAfter means no clip plays here: black, whatever take
     // was placed and however it was placed. The picture comes back once sound has lasted gapLeave.
     {
-        const auto gapNow = longSilence || stayInGap;
+        const auto gapNow = longSilence || longMismatch || stayInGap;
 
         if (gapNow != inGap)
         {
             inGap = gapNow;
+            if (gapNow)
+                matchedNow = false; // leaving the gap needs fresh evidence that a take plays
             note (gapNow ? TakeChange::gapStart : TakeChange::gapEnd, loggedTake, loggedPass, gapNow ? -1 : take->takeId,
                   gapNow ? (int16_t) -1 : (int16_t) passOf (*take, placement.offset), hostNow);
             if (! gapNow)
@@ -416,6 +471,8 @@ SlotTarget SyncController::update (double wallNow)
     }
 
     out.pass = (int16_t) passOf (*take, placement.offset);
+    if (fingerprint != nullptr)
+        fingerprint->setShown (take->takeId, placement.offset);
     if (! inGap && hs.playing && (take->takeId != loggedTake || out.pass != loggedPass))
     {
         note (changePath, loggedTake, loggedPass, take->takeId, out.pass, hostNow);

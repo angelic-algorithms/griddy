@@ -260,6 +260,10 @@ struct Timeline
 
     explicit Timeline (int slots) : clips ((size_t) slots) {}
 
+    // Live with the track armed and Monitor on Auto passes the mic through wherever no clip plays (deleted, deactivated
+    // or past the end): room sound at this level instead of digital silence. 0 is no mic.
+    float monitored = 0.0f;
+
     struct Truth { bool exists = false; int32_t takeId = -1; double takeSeconds = 0.0; };
 
     Truth truth (int slot, double host) const
@@ -291,6 +295,25 @@ struct Timeline
                 out[i] += c.gain * c.fadeAt (host) * ((*c.audio)[(size_t) idx] * (1.0f - frac) + (*c.audio)[(size_t) idx + 1] * frac);
             }
         }
+
+        if (monitored > 0.0f)
+            for (int i = 0; i < n; ++i)
+            {
+                const auto host = (hostStartSample + i) / SR;
+                bool playing = false;
+                for (const auto& c : clips[(size_t) slot])
+                    playing = playing || (c.gain > 0.0f && c.covers (host));
+                if (playing)
+                    continue;
+
+                // Room sound: hiss plus a voice in the room, from a hash of the sample so any thread may render.
+                auto h = (uint32_t) ((int64_t) hostStartSample + i) * 2654435761u;
+                h ^= h >> 15;
+                h *= 2246822519u;
+                h ^= h >> 13;
+                const auto hiss = ((float) (h & 0xffff) / 32768.0f - 1.0f);
+                out[i] += monitored * (hiss + 3.0f * (float) std::sin (host * 2.0 * 3.14159265 * 220.0) * (float) (0.5 + 0.5 * std::sin (host * 9.0)));
+            }
     }
 };
 
@@ -1595,6 +1618,54 @@ void compLoopSmooth()
     finish (*w);
 }
 
+// What Live does with the track armed and Monitor on Auto: wherever no clip plays, the mic comes through instead of
+// digital silence. A comp of B then A with A deleted from 4 to 5 s and deactivated from 6 to 7 s, the clips played 3 ms
+// early as Live's latency may leave them: video only while a take plays, black otherwise, for the whole loop.
+void compMonitored()
+{
+    const auto loop = 8.0;
+    auto w = makeWorld (1);
+    auto& A = w->add (recordTake (*w->engine, 0, loop, voiceLike (211, loop + 0.5), 10.0));
+    auto& B = w->add (recordTake (*w->engine, 0, loop, voiceLike (212, loop + 0.5), 10.0));
+    keepAndLoad (*w, 0, B);
+
+    const auto early = 0.003;
+    Timeline tl (1);
+    tl.monitored = 0.003f;
+    tl.clips[0].push_back (Clip::place (B, 10.0, early, 2.0));
+    tl.clips[0].push_back (Clip::place (A, 12.0, 2.0 + early, 2.0));
+    auto off = Clip::place (A, 16.0, 6.0 + early, 1.0);
+    off.gain = 0.0f; // deactivated with 0
+    tl.clips[0].push_back (off);
+    tl.clips[0].push_back (Clip::place (A, 15.0, 5.0 + early, 1.0));
+    tl.clips[0].push_back (Clip::place (A, 17.0, 7.0 + early, 0.9));
+    const auto s = observe (*w, tl, { { Event::loopOn, 0.0, 10.0, 10.0 + loop }, { Event::seek, 0.0, 10.0 }, { Event::play, 0.0 } }, 10.0, 25.0, 0);
+
+    auto lapOf = [&] (const Sample& x) { return std::fmod (x.host - 10.0, loop); };
+    int dark = 0, darkBlack = 0, lit = 0, litShown = 0;
+    for (const auto& x : s)
+    {
+        if (! x.playing || x.t < 0.5)
+            continue;
+        const auto lapT = lapOf (x);
+        const auto inDark = (lapT >= 4.3 && lapT < 4.95) || (lapT >= 6.3 && lapT < 6.95);
+        const auto inLit = (lapT >= 0.3 && lapT < 3.95) || (lapT >= 5.3 && lapT < 5.95) || (lapT >= 7.1 && lapT < 7.85);
+        if (inDark)
+        {
+            ++dark;
+            darkBlack += x.black ? 1 : 0;
+        }
+        if (inLit && x.truth)
+        {
+            ++lit;
+            litShown += x.labelOk && std::abs (x.errMs) < 80.0 ? 1 : 0;
+        }
+    }
+    check (dark > 0 && darkBlack == dark, "with the mic monitored, deleted and deactivated stretches are black from 0.3 s in (" + juce::String (darkBlack) + "/" + juce::String (dark) + ")");
+    check (lit > 0 && litShown > 0.97 * lit, "and every take that plays shows in sync from 0.3 s after it starts (" + juce::String (100.0 * litShown / std::max (1, lit), 1) + " percent)");
+    finish (*w);
+}
+
 // The plugin never offers test patterns: they exist for the harness, the smoke test and CI only.
 void noTestPatterns()
 {
@@ -2371,6 +2442,7 @@ int main (int argc, char** argv)
         { "comp_replay", compReplay, false },
         { "live_silent_takes", liveSilentTakes, true },
         { "comp_loop_smooth", compLoopSmooth, true },
+        { "comp_monitored", compMonitored, true },
         { "comp_recording_load", compRecordingLoad, true },
         { "comp_bench", compBench, true },
         { "bench", bench, true },
