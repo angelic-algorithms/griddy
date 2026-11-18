@@ -1,7 +1,12 @@
-# Links Griddy's Record arm to Live: a track's Griddy records only while that track is armed in Live and Live records,
-# so every Griddy take has an audio clip in Live to follow. Griddy's own arm follows Live's, and pressing Griddy's REC
-# asks Live: it arms that track, switches Live's record button on and starts playback if Live is stopped. Pressing REC
-# again while Live records switches Live's record button off.
+# Links Griddy to Live's arm and record buttons, so every Griddy take has an audio clip in Live to follow.
+#
+# Live owns arming and recording. A track's Griddy records only while that track is armed in Live and Live records:
+# this script sets Griddy's Record arm parameter to exactly that, and nothing else writes it while the script runs.
+# Griddy's REC and Arm buttons ask Live through a file, live-requests.json, which this script reads every display
+# tick: REC on an armed track switches Live's record on (and plays if Live is stopped), REC again switches it off,
+# and Arm arms or disarms that one track. A press never goes through a parameter, so it cannot come back as another
+# press or be written as automation. (It used to: the script read any Record arm change it had not made as a press,
+# and Griddy's own disarm after a take then started and stopped Live's recording every tenth of a second.)
 #
 # Live never tells a plugin whether its track is armed or whether Live records, so this runs as a control surface
 # script (Settings, Link, Tempo & MIDI, Control Surface: Griddy), which can see both and set Griddy's parameter.
@@ -11,12 +16,13 @@
 # It changes Monitor in no other case.
 #
 # It also copies Live's arm to Griddy's "Track armed in Live" parameter, so Griddy shows the camera on an armed track
-# before Live records. That parameter only changes what Griddy shows.
+# before Live records, and knows whether its REC can record.
 #
 # And it tells Griddy what the arrangement holds on every Griddy track: each clip's place, whether it plays (deactivated
 # with 0 or at zero gain does not), and which recorded file it plays from where. It writes that to TIMELINE_PATH every
 # second and whenever it changes; Griddy reads it to go black exactly where no clip plays and to switch takes on the
-# frame of a cut. Without the file, Griddy still works it out from the sound, a little later.
+# frame of a cut, and takes it as the sign that this script runs. Without the file, Griddy still works it out from the
+# sound, a little later, and its REC arms Griddy itself.
 
 import json
 import os
@@ -33,6 +39,8 @@ MONITOR_AUTO = 1
 MONITOR_OFF = 2
 TIMELINE_PATH = os.path.expanduser("~/Library/Application Support/Griddy/live-timeline.json")
 TIMELINE_EVERY = 1.0  # seconds: rewritten this often even unchanged, so Griddy can tell the script still runs
+REQUESTS_PATH = os.path.join(os.path.dirname(TIMELINE_PATH), "live-requests.json")
+REQUEST_MAX_AGE = 3.0  # seconds: an older press is dropped, so starting Live never replays one
 
 
 def griddy_arm(device):
@@ -89,8 +97,8 @@ class Griddy(ControlSurface):
         ControlSurface.__init__(self, c_instance)
         self._listeners = []  # (remove function, listener) pairs to undo on disconnect
         self._pending = False
-        self._set_by_us = {}  # id(parameter) -> the value this script wants it to have; anything else is a press
-        self._requests = []   # (track, wants recording) from presses of Griddy's REC
+        self._requests_at = None  # the requests file's modification time when last read
+        self._request_id = None   # the newest request done; None until the file is first read, which does none
         self._timeline_text = None
         self._timeline_at = 0.0
         self._born = {}       # file path -> when it was created, seconds since the epoch
@@ -139,17 +147,8 @@ class Griddy(ControlSurface):
             for device in track.devices:
                 arm = griddy_arm(device)
                 if arm is not None:
-                    self._listen(arm, "value", self._pressed(track, arm))
+                    self._listen(arm, "value", self._request_sync)  # anything else writing it is put back
         self._request_sync()
-
-    def _pressed(self, track, arm):
-        """A listener for one Griddy's Record arm. A change this script did not make is the user pressing REC."""
-        def listener():
-            if self._set_by_us.get(id(arm)) != arm.value:
-                self._requests.append((track, arm.value > (arm.min + arm.max) / 2.0))
-            self._request_sync()
-        listener.__name__ = "griddy_arm_%d" % id(arm)
-        return listener
 
     def _rebuild_later(self):
         # Live does not allow changes from inside a notification; rebuilding listeners is safe a tick later too.
@@ -169,22 +168,6 @@ class Griddy(ControlSurface):
     def _sync(self):
         self._pending = False
         song = self.song()
-
-        # Presses of Griddy's REC become Live's: record on this track, or stop recording.
-        requests, self._requests = self._requests, []
-        for track, wants in requests:
-            if wants and not (track.arm and self._recording()):
-                if not track.arm:
-                    track.arm = True
-                if not song.record_mode:
-                    song.record_mode = True
-                if not song.is_playing:
-                    song.start_playing()
-                self.log_message("Griddy: REC on %s, so Live arms it and records" % track.name)
-            elif not wants and track.arm and self._recording():
-                song.record_mode = False
-                song.session_record = False
-                self.log_message("Griddy: REC off on %s, so Live stops recording" % track.name)
 
         recording = self._recording()
         for track in self.song().tracks:
@@ -207,14 +190,89 @@ class Griddy(ControlSurface):
             on = track.arm and recording
             for arm in arms:
                 want = arm.max if on else arm.min
-                self._set_by_us[id(arm)] = want
                 if arm.value != want and arm.is_enabled:
                     arm.value = want
+
+    # Presses of Griddy's REC and Arm ---------------------------------------------------------------------------
+
+    def _read_requests(self):
+        """New requests from live-requests.json, oldest first. The first read only notes where the file is."""
+        try:
+            at = os.path.getmtime(REQUESTS_PATH)
+        except OSError:
+            if self._request_id is None:
+                self._request_id = 0
+            return []
+        if at == self._requests_at:
+            return []
+        self._requests_at = at
+        try:
+            with open(REQUESTS_PATH) as f:
+                listed = json.load(f).get("requests", [])
+        except (IOError, OSError, ValueError):
+            return []
+        newest = max([r.get("id", 0) for r in listed] + [0])
+        if self._request_id is None:
+            self._request_id = newest
+            return []
+        fresh = [r for r in listed if r.get("id", 0) > self._request_id]
+        self._request_id = max(self._request_id, newest)
+        now = time.time()
+        return sorted([r for r in fresh if now - r.get("at", 0) <= REQUEST_MAX_AGE], key=lambda r: r.get("id", 0))
+
+    def _griddy_track(self, request):
+        """The track whose Griddy asked: by its Slot, else by the track's name."""
+        named = None
+        for track in self.song().tracks:
+            if not getattr(track, "can_be_armed", False):
+                continue
+            for device in track.devices:
+                params = griddy_parameters(device)
+                if params is None or (MASTER_PARAMETER in params and is_on(params[MASTER_PARAMETER])):
+                    continue
+                slot = params.get(SLOT_PARAMETER)
+                if slot is not None and hasattr(slot, "str_for_value") and slot.str_for_value(slot.value).strip() == str(request.get("slot")):
+                    return track
+                if named is None and track.name == request.get("track"):
+                    named = track
+        return named
+
+    def _do_requests(self):
+        song = self.song()
+        for request in self._read_requests():
+            action = request.get("action")
+            track = self._griddy_track(request)
+            if track is None:
+                self.log_message("Griddy: a request to %s found no Griddy track for slot %s" % (action, request.get("slot")))
+                continue
+            if action == "arm" and not track.arm:
+                track.arm = True
+                self.log_message("Griddy: Arm on %s's Griddy, so Live arms it" % track.name)
+            elif action == "disarm" and track.arm:
+                track.arm = False
+                self.log_message("Griddy: Arm off on %s's Griddy, so Live disarms it" % track.name)
+            elif action == "record":
+                if not track.arm:
+                    self.log_message("Griddy: REC on %s, which is not armed, so Live does nothing" % track.name)
+                    continue
+                if not song.record_mode:
+                    song.record_mode = True
+                if not song.is_playing:
+                    song.start_playing()
+                self.log_message("Griddy: REC on %s, so Live records" % track.name)
+            elif action == "stop" and self._recording():
+                song.record_mode = False
+                song.session_record = False
+                self.log_message("Griddy: REC off on %s, so Live stops recording" % track.name)
 
     # The arrangement -------------------------------------------------------------------------------------------
 
     def update_display(self):
         ControlSurface.update_display(self)
+        try:
+            self._do_requests()
+        except Exception as e:
+            self.log_message("Griddy: could not do a request from Griddy: %s" % e)
         try:
             self._write_timeline()
         except Exception as e:

@@ -50,6 +50,9 @@ class Param(Listenable):
         Listenable.__init__(self)
         self.name, self.value, self.min, self.max, self.is_enabled = name, 0.0, 0.0, 1.0, True
 
+    def str_for_value(self, value):
+        return "%d" % value
+
     def __setattr__(self, k, v):
         object.__setattr__(self, k, v)
         if k == "value" and "_listeners" in self.__dict__:
@@ -67,6 +70,11 @@ class Track(Listenable):
         Listenable.__init__(self)
         self.name, self.devices, self.arm, self.can_be_armed, self.current_monitoring_state = name, devices, False, True, monitor
         self.arrangement_clips, self.take_lanes, self.mute, self.muted_via_solo, self.playing_slot_index = [], [], False, False, -1
+
+    def __setattr__(self, k, v):
+        object.__setattr__(self, k, v)
+        if k == "arm" and "_listeners" in self.__dict__:
+            self._notify("arm")  # Live tells listeners when a script arms a track, as when you click Arm
 
 
 class Clip(object):
@@ -146,6 +154,24 @@ import Griddy as script  # noqa: E402
 
 link = sys.modules["Griddy.Griddy"]  # the module; the package name Griddy also names the class
 link.TIMELINE_PATH = os.path.join(tempfile.mkdtemp(), "Griddy", "live-timeline.json")
+link.REQUESTS_PATH = os.path.join(os.path.dirname(link.TIMELINE_PATH), "live-requests.json")
+request_id = [1000]
+written_requests = []
+
+
+def press(action, slot=1, track="Vocals", age=0.0):
+    """Griddy's REC or Arm, as the plugin writes it; the script does it on its next display tick."""
+    import time
+    request_id[0] += 1
+    written_requests.append({"id": request_id[0], "slot": slot, "track": track, "action": action, "at": time.time() - age})
+    folder = os.path.dirname(link.REQUESTS_PATH)
+    if not os.path.isdir(folder):
+        os.makedirs(folder)
+    with open(link.REQUESTS_PATH, "w") as f:
+        json.dump({"version": 1, "requests": written_requests[-8:]}, f)
+    os.utime(link.REQUESTS_PATH, (request_id[0], request_id[0]))  # a new modification time each press, as on disk
+    surface.update_display()
+    run_scheduled()
 
 griddy = lambda: Device("Griddy", "PluginDevice", ["Slot", "Cameras", "Record arm", "Master", "Track armed in Live"])
 vocals = Track("Vocals", [griddy()], monitor=2)
@@ -153,9 +179,17 @@ guitar = Track("Guitar", [Device("EQ Eight", "Eq8Device", ["Gain"])], monitor=2)
 song = Song([vocals, guitar])
 arm = vocals.devices[0].parameters[2]
 shown = vocals.devices[0].parameters[4]
+vocals.devices[0].parameters[0].value = 1.0  # Griddy's Slot 1
 
+folder = os.path.dirname(link.TIMELINE_PATH)
+os.makedirs(folder)
+with open(os.path.join(folder, "live-requests.json"), "w") as f:
+    json.dump({"version": 1, "requests": [{"id": 5, "slot": 1, "track": "Vocals", "action": "arm", "at": 0}]}, f)
 surface = script.create_instance(song)
 run_scheduled()
+surface.update_display()
+run_scheduled()
+check(not vocals.arm, "requests already in the file when the script starts are not done")
 check(arm.value == 0.0, "nothing armed, Live not recording: Griddy is not armed")
 check(vocals.current_monitoring_state == 2, "Monitor is left alone while the track is not armed")
 
@@ -177,16 +211,41 @@ check(arm.value == 0.0, "Live stops recording: Griddy is disarmed")
 vocals.set("arm", False)
 run_scheduled()
 song.is_playing = False
-arm.value = 1.0  # the user presses Griddy's REC with the track disarmed and Live stopped
+arm.value = 1.0  # something other than the script writes Record arm, as Griddy's old disarm after a take did
 run_scheduled()
-check(vocals.arm and song.record_mode, "pressing Griddy's REC arms the track in Live and switches Live's record on")
-check(song.is_playing, "and starts Live playing, so it records")
+check(arm.value == 0.0 and not song.record_mode and not vocals.arm, "a stray write to Record arm is put back and never reaches Live")
+
+press("record")
+check(not vocals.arm and not song.record_mode and not song.is_playing, "REC on a track not armed in Live does nothing in Live")
+check(arm.value == 0.0, "and Griddy stays disarmed")
+
+press("arm")
+check(vocals.arm and shown.value == 1.0, "Arm on Griddy arms its track in Live, and Track armed in Live follows")
+check(not song.record_mode and arm.value == 0.0, "arming does not record")
+press("arm", slot=2, track="Guitar")
+check(not guitar.arm, "a request for a slot with no Griddy track arms nothing")
+
+press("record")
+check(song.record_mode and song.is_playing, "REC on an armed track switches Live's record on and starts playing")
 check(arm.value == 1.0, "and Griddy is armed with Live")
 
-arm.value = 0.0  # the user presses Griddy's REC again while Live records
-run_scheduled()
-check(not song.record_mode and arm.value == 0.0, "pressing REC again switches Live's record off, and Griddy disarms")
-check(vocals.arm, "the track stays armed in Live, as after Live's own record button")
+for _ in range(5):
+    arm.value = 0.0  # Griddy writing its arm off mid take, many times
+    run_scheduled()
+check(arm.value == 1.0 and song.record_mode, "while Live records, a write of Record arm off is put back and Live keeps recording")
+
+press("stop")
+check(not song.record_mode and arm.value == 0.0, "REC again switches Live's record off, and Griddy disarms")
+check(vocals.arm and song.is_playing, "the track stays armed and Live keeps playing, as after Live's own record button")
+press("stop")
+check(not song.record_mode, "a second stop changes nothing")
+
+press("disarm")
+check(not vocals.arm and shown.value == 0.0, "Arm off on Griddy disarms the track in Live")
+press("arm", age=10.0)
+check(not vocals.arm, "a press older than a few seconds is dropped")
+press("arm", slot=7, track="Vocals")
+check(vocals.arm, "a request whose slot is not found falls back to the track's name")
 
 song.set("session_record", True)
 run_scheduled()
