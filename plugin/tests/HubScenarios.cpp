@@ -211,7 +211,9 @@ void hubRecordThenPlay (const Report& report)
     auto& one = *w.instances[0];
     report.check (w.hub->getSession() == session, "the second set opened the first set's session");
 
-    // 22:55:19: play for five seconds without arm, so slot 1 plays its old take.
+    // 22:55:19: play for five seconds without arm, so slot 1 plays its old take. The track has sound throughout, as it
+    // does when Live records the clip with the take (the Live script links the two): with no sound, playback is black.
+    w.daw->tone = 0.3f;
     w.daw->playFrom (0);
     pump (5.0);
     w.daw->stop();

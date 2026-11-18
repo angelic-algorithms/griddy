@@ -651,9 +651,16 @@ void loopWrap()
     const auto s = observe (*w, tl, { { Event::loopOn, 0.0, 11.0, 14.0 }, { Event::seek, 0.0, 10.2 }, { Event::play, 0.0 } }, 10.2, 11.0, 0);
 
     report ("through three loop wraps", errStats (s, 0.4, 11.0));
+    if (getenv ("GRIDDY_DEBUG"))
+        for (const auto& x : s)
+            if (x.t > 0.4 && x.truth && x.playing && ! (x.labelOk && std::abs (x.errMs) < 100.0))
+                say ("   wrong at t " + juce::String (x.t, 3) + " host " + juce::String (x.host, 3) + " shown " + juce::String ((int) x.shown) + " black " + juce::String ((int) x.black)
+                     + " gap " + juce::String ((int) x.gap) + " label " + juce::String (x.label) + " err " + juce::String (x.errMs, 1) + " status " + juce::String ((int) x.status));
     for (double wrapAt : { 3.8, 6.8, 9.8 })
     {
-        const auto st = errStats (s, wrapAt, wrapAt + 0.3);
+        // From one frame after the wrap: the picture is drawn at 30 fps, so a sample in the first 33 ms can still show
+        // the last frame drawn before it, depending only on when the harness happened to sample.
+        const auto st = errStats (s, wrapAt + 0.034, wrapAt + 0.3);
         check (st.badFraction == 0.0 && st.max < 80.0, "after the wrap at " + juce::String (wrapAt, 1) + " s: max error " + juce::String (st.max, 1) + " ms");
     }
     finish (*w);
