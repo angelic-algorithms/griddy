@@ -67,7 +67,7 @@ export type SlotInfo = {
   claimed: boolean;
   recording: boolean;
   status: "noTake" | "stopped" | "prior" | "locked" | "held" | "lost";
-  source: "none" | "hostPosition" | "fingerprint" | "embedded";
+  source: "none" | "hostPosition" | "fingerprint" | "embedded" | "timeline";
   takeId: number;
   warp: boolean;
   lockMs: number;

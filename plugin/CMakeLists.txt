@@ -83,6 +83,7 @@ set(GRIDDY_CORE_SOURCES
     source/engine/TakeRecorder.cpp
     source/engine/VideoDecoder.cpp
     source/engine/SyncController.cpp
+    source/engine/LiveTimeline.cpp
     source/engine/SlotPlayer.cpp
     source/engine/PlaybackEngine.cpp
     source/engine/sync/EmbeddedSync.cpp

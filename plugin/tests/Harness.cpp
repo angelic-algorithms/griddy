@@ -1666,6 +1666,114 @@ void compMonitored()
     finish (*w);
 }
 
+// What the Live script reports for a slot: the harness timeline's clips, each take's audio standing for its file.
+std::shared_ptr<const SlotTimeline> timelineOf (const Timeline& tl, int slot, const std::vector<const Recorded*>& files)
+{
+    auto t = std::make_shared<SlotTimeline>();
+    for (const auto& c : tl.clips[(size_t) slot])
+    {
+        TimelineClip x;
+        x.hostStart = c.startHost;
+        x.hostEnd = c.startHost + c.length;
+        x.active = c.gain > 0.0f;
+        for (size_t i = 0; i < files.size(); ++i)
+            if (files[i]->id() == c.takeId)
+                x.file = (int) i;
+        x.originKnown = c.stretch == 1.0;
+        x.origin = c.anchorHost - c.anchorTake;
+        t->clips.push_back (x);
+    }
+    return t;
+}
+
+// The same comp as comp_monitored, with Live's arrangement reported by the Live script: black and each cut land on the
+// clip edges, not after listening. Run twice: takes with sound and the mic monitored, and takes recorded silent (Live's
+// Monitor was Off), which sound matching can never tell apart.
+void compTimeline()
+{
+    for (const auto silent : { false, true })
+    {
+        const auto loop = 8.0;
+        const juce::String what = silent ? "silent takes: " : "with the arrangement: ";
+        auto w = makeWorld (1);
+        auto quiet = [&] (std::vector<float> v) { if (silent) std::fill (v.begin(), v.end(), 0.0f); return v; };
+        // B began half a second before A, as two takes recorded from different spots.
+        auto& A = w->add (recordTake (*w->engine, 0, loop, quiet (voiceLike (221, loop + 0.5)), 10.0));
+        auto& B = w->add (recordTake (*w->engine, 0, loop + 0.5, quiet (voiceLike (222, loop + 1.0)), 9.5));
+        keepAndLoad (*w, 0, B);
+
+        Timeline tl (1);
+        tl.monitored = silent ? 0.0f : 0.003f;
+        tl.clips[0].push_back (Clip::place (B, 10.0, 0.5, 2.0));
+        tl.clips[0].push_back (Clip::place (A, 12.0, 2.0, 2.0));
+        auto off = Clip::place (A, 16.0, 6.0, 1.0);
+        off.gain = 0.0f; // deactivated with 0
+        tl.clips[0].push_back (off);
+        tl.clips[0].push_back (Clip::place (A, 15.0, 5.0, 1.0));
+        tl.clips[0].push_back (Clip::place (B, 17.0, 7.5, 0.9));
+        w->engine->setTimeline (0, timelineOf (tl, 0, { &A, &B }));
+
+        const auto s = observe (*w, tl, { { Event::loopOn, 0.0, 10.0, 10.0 + loop }, { Event::seek, 0.0, 10.0 }, { Event::play, 0.0 } }, 10.0, 17.0, 0);
+
+        // Clip edges in the loop, and what plays after each: a take, or nothing.
+        struct Edge { double at; bool lit; };
+        const std::vector<Edge> edges { { 2.0, true }, { 4.0, false }, { 5.0, true }, { 6.0, false }, { 7.0, true }, { 7.9, false } };
+        std::vector<double> delays;
+        int dark = 0, darkBlack = 0, lit = 0, litShown = 0;
+        double lastLap = -1.0;
+        std::vector<bool> seen (edges.size(), false);
+        std::vector<double> edgeWall (edges.size(), -1.0);
+
+        for (const auto& x : s)
+        {
+            if (! x.playing || x.t < 0.5)
+                continue;
+            const auto lapT = std::fmod (x.host - 10.0, loop);
+            if (lapT < lastLap)
+                std::fill (seen.begin(), seen.end(), false), std::fill (edgeWall.begin(), edgeWall.end(), -1.0);
+            lastLap = lapT;
+
+            const auto inDark = (lapT >= 4.05 && lapT < 4.98) || (lapT >= 6.05 && lapT < 6.98) || lapT >= 7.95;
+            if (inDark)
+            {
+                ++dark;
+                darkBlack += x.black ? 1 : 0;
+            }
+            else if (x.truth && lapT > 0.05 && std::fmod (lapT, 1.0) > 0.05)
+            {
+                ++lit;
+                litShown += x.labelOk && std::abs (x.errMs) < 40.0 ? 1 : 0;
+            }
+
+            // How long after each edge the picture is what plays there.
+            for (size_t i = 0; i < edges.size(); ++i)
+                if (lapT >= edges[i].at && lapT < edges[i].at + 0.5 && ! seen[i])
+                {
+                    if (edgeWall[i] < 0.0)
+                        edgeWall[i] = x.t - (lapT - edges[i].at);
+                    const auto right = edges[i].lit ? (x.labelOk && std::abs (x.errMs) < 40.0) : x.black;
+                    if (right)
+                    {
+                        seen[i] = true;
+                        delays.push_back (x.t - edgeWall[i]);
+                        if (getenv ("GRIDDY_DEBUG") && x.t - edgeWall[i] > 0.06)
+                            say ("   slow edge " + juce::String (edges[i].at) + " at t " + juce::String (x.t, 2) + ": " + juce::String ((x.t - edgeWall[i]) * 1000.0, 0) + " ms");
+                    }
+                }
+        }
+
+        std::sort (delays.begin(), delays.end());
+        const auto worst = delays.empty() ? -1.0 : delays.back();
+        const auto median = delays.empty() ? -1.0 : delays[delays.size() / 2];
+        metric (what + "picture right after a clip edge, median", median * 1000.0, "ms");
+        metric (what + "picture right after a clip edge, worst", worst * 1000.0, "ms");
+        check (dark > 0 && darkBlack == dark, what + "deleted and deactivated stretches are black from 0.05 s in (" + juce::String (darkBlack) + "/" + juce::String (dark) + ")");
+        check (lit > 0 && litShown > 0.98 * lit, what + "every clip shows its own take in sync from 0.05 s in (" + juce::String (100.0 * litShown / std::max (1, lit), 1) + " percent)");
+        check (delays.size() >= 6 && worst < 0.1, what + "each clip edge shows on the picture within 0.1 s (median " + juce::String (median * 1000.0, 0) + " ms, worst " + juce::String (worst * 1000.0, 0) + " ms)");
+        finish (*w);
+    }
+}
+
 // The plugin never offers test patterns: they exist for the harness, the smoke test and CI only.
 void noTestPatterns()
 {
@@ -2443,6 +2551,7 @@ int main (int argc, char** argv)
         { "live_silent_takes", liveSilentTakes, true },
         { "comp_loop_smooth", compLoopSmooth, true },
         { "comp_monitored", compMonitored, true },
+        { "comp_timeline", compTimeline, true },
         { "comp_recording_load", compRecordingLoad, true },
         { "comp_bench", compBench, true },
         { "bench", bench, true },

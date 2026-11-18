@@ -991,6 +991,9 @@ void Hub::controlTick()
         const auto armed = armedMask.load();
         bool anyRecording = false;
 
+        if ((tick % 25) == 0)
+            updateTimeline (*e);
+
         for (int s = 0; s < e->numSlots(); ++s)
         {
             const auto rec = slotRecording[(size_t) s].load();
@@ -1425,6 +1428,74 @@ static const char* statusName (SyncStatus s)
     return "noTake";
 }
 
+void Hub::updateTimeline (PlaybackEngine& e)
+{
+    // The Live script rewrites its file every second; one older than a few seconds means Live or the script stopped.
+    const auto file = liveTimelineFile();
+    const auto modified = file.getLastModificationTime();
+    const auto now = (double) juce::Time::currentTimeMillis() / 1000.0;
+    const auto changed = modified != timelineModified || &e != timelineEngine;
+
+    if (changed && file.existsAsFile())
+    {
+        timelineModified = modified;
+        LiveTimeline parsed;
+        if (parseLiveTimeline (file.loadFileAsString(), parsed))
+            liveTimeline = std::move (parsed);
+    }
+
+    const auto fresh = now - liveTimeline.written < 3.0 && file.existsAsFile();
+
+    std::array<juce::String, maxSlots> names;
+    uint32_t mine = 0;
+    {
+        const std::scoped_lock sl (memberLock);
+        for (auto& m : members)
+            if (const auto s = m->slot.load(); juce::isPositiveAndBelow (s, maxSlots) && ! m->isMaster)
+            {
+                names[(size_t) s] = m->trackName;
+                mine |= 1u << s;
+            }
+    }
+
+    for (int s = 0; s < e.numSlots() && s < maxSlots; ++s)
+    {
+        // The track whose Griddy shows this slot; by name when the script could not read the slot.
+        const LiveTimelineTrack* track = nullptr;
+        if (fresh && ((mine >> s) & 1u) != 0)
+        {
+            for (const auto& t : liveTimeline.tracks)
+                if (t.slot == s)
+                    track = &t;
+            if (track == nullptr && names[(size_t) s].isNotEmpty())
+                for (const auto& t : liveTimeline.tracks)
+                    if (t.slot < 0 && t.name == names[(size_t) s])
+                        track = &t;
+        }
+
+        auto& had = timelines[(size_t) s];
+        const auto same = track == nullptr ? had == nullptr : (had != nullptr && *had == track->timeline);
+        if (same && &e == timelineEngine)
+            continue;
+
+        if (track == nullptr)
+        {
+            if (had != nullptr)
+                log ("slot " + juce::String (s + 1) + ": Live's arrangement no longer reported; following the sound only");
+            had = nullptr;
+        }
+        else
+        {
+            if (had == nullptr)
+                log ("slot " + juce::String (s + 1) + ": following Live's arrangement (" + juce::String ((int) track->timeline.clips.size()) + " clips)");
+            had = std::make_shared<const SlotTimeline> (track->timeline);
+        }
+        e.setTimeline (s, had);
+    }
+
+    timelineEngine = &e;
+}
+
 static const char* kindName (SyncKind k)
 {
     switch (k)
@@ -1432,6 +1503,7 @@ static const char* kindName (SyncKind k)
         case SyncKind::embedded:     return "embedded";
         case SyncKind::fingerprint:  return "fingerprint";
         case SyncKind::hostPosition: return "hostPosition";
+        case SyncKind::timeline:     return "timeline";
         default: break;
     }
     return "none";

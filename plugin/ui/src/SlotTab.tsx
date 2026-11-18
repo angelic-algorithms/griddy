@@ -21,7 +21,7 @@ const syncText: Record<SlotInfo["status"], string> = {
   lost: "Audio does not match",
 };
 
-const sourceText: Record<SlotInfo["source"], string> = { none: "", hostPosition: "playhead", fingerprint: "fingerprint", embedded: "sync signal" };
+const sourceText: Record<SlotInfo["source"], string> = { none: "", hostPosition: "playhead", fingerprint: "fingerprint", embedded: "sync signal", timeline: "Live arrangement" };
 
 /** How a slot is following the DAW, as a sticker. */
 export function SyncChip({ slot }: { slot: SlotInfo | undefined }) {

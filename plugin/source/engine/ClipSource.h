@@ -11,7 +11,8 @@ enum class SyncKind : uint8_t
     none = 0,
     hostPosition, // the take is assumed to sit where it was recorded
     fingerprint,  // audio matched against the take's reference audio
-    embedded      // Griddy's own sync signal decoded from the audio
+    embedded,     // Griddy's own sync signal decoded from the audio
+    timeline      // Live's arrangement, from the Live script: the clip that plays here and where its file starts
 };
 
 /** "At host time hostSeconds, the audio you hear is takeSeconds into take takeId."

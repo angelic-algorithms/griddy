@@ -123,6 +123,7 @@ public:
     /** Black gaps need the slot's own track audio: the hub turns them off for slots no Griddy owns and for slots
         that are armed or recording. */
     void setGapsAllowed (int slot, bool on) noexcept { slots[(size_t) slot]->controller.setGapsAllowed (on); }
+    void setTimeline (int slot, std::shared_ptr<const SlotTimeline> t) { slots[(size_t) slot]->controller.setTimeline (std::move (t)); }
 
     /** While any slot records, the sync worker does less, so the recording never loses a frame to it. */
     void setRecordingActive (bool on) noexcept;

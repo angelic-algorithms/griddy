@@ -25,6 +25,7 @@ const char* TakeChange::pathName (Path p)
         case silence:     return "silent piece";
         case gapStart:    return "gap starts";
         case gapEnd:      return "gap ends";
+        case timeline:    return "Live's arrangement";
     }
     return "";
 }
@@ -61,6 +62,123 @@ void SyncController::setTakes (std::vector<TakeProfile> t)
     const std::scoped_lock sl (takeLock);
     takes = std::move (t);
     takesChanged = true;
+}
+
+void SyncController::setTimeline (std::shared_ptr<const SlotTimeline> t)
+{
+    const std::scoped_lock sl (takeLock);
+    timeline = std::move (t);
+    timelineChanged = true;
+}
+
+// Where a take's first second sits on the host timeline (a take recorded while looping has passes before its last).
+static double takeZero (const TakeProfile& t)
+{
+    return t.ranges.empty() ? t.hostStartSeconds : t.ranges.front().hostStart - t.ranges.front().takeAtHostStart;
+}
+
+std::vector<SyncController::FileBinding> SyncController::bindFiles (const SlotTimeline& tl, const std::vector<TakeProfile>& takes)
+{
+    // Griddy starts its take with Live's recording or a moment later (the script arms it on the next tick), so a
+    // take begins between just before and a little after its file. Clips of a file that were not moved, on the main
+    // lane or a take lane, show where the file started.
+    constexpr double earliestLead = -0.1, latestLead = 1.5;
+    constexpr double bornWithin = 30.0; // seconds between the file's creation and the take's
+
+    std::vector<int> files;
+    for (const auto& c : tl.clips)
+        if (c.file >= 0 && std::find (files.begin(), files.end(), c.file) == files.end())
+            files.push_back (c.file);
+
+    struct Candidate { const TakeProfile* take; double lead; bool leadKnown; };
+    std::vector<std::vector<Candidate>> found (files.size());
+    std::vector<double> born (files.size(), 0.0);
+
+    for (size_t f = 0; f < files.size(); ++f)
+        for (const auto& t : takes)
+        {
+            bool have = false;
+            double lead = 0.0;
+            for (const auto& c : tl.clips)
+            {
+                if (c.file != files[f])
+                    continue;
+                born[f] = std::max (born[f], c.fileBorn);
+                if (! c.originKnown)
+                    continue;
+                const auto l = takeZero (t) - c.origin;
+                if (l >= earliestLead && l <= latestLead && (! have || std::abs (l) < std::abs (lead)))
+                {
+                    have = true;
+                    lead = l;
+                }
+            }
+            if (have)
+                found[f].push_back ({ &t, lead, true });
+        }
+
+    // A take that is the only fit for one file is not another file's: Live writes one file per recording.
+    auto taken = [&] (const TakeProfile* t, size_t except)
+    {
+        for (size_t g = 0; g < files.size(); ++g)
+            if (g != except && found[g].size() == 1 && found[g].front().take == t)
+                return true;
+        return false;
+    };
+    for (bool changed = true; changed;)
+    {
+        changed = false;
+        for (size_t f = 0; f < files.size(); ++f)
+            if (found[f].size() > 1)
+            {
+                const auto before = found[f].size();
+                found[f].erase (std::remove_if (found[f].begin(), found[f].end(), [&] (const Candidate& c) { return taken (c.take, f); }),
+                                found[f].end());
+                changed = changed || found[f].size() != before;
+            }
+    }
+
+    std::vector<FileBinding> out;
+    for (size_t f = 0; f < files.size(); ++f)
+    {
+        // Several takes started where this file did (each take begun from the same spot), or none did because every
+        // clip of the file was moved: the one created closest to the file's creation, if it stands out.
+        if (found[f].size() != 1 && born[f] > 0.0)
+        {
+            std::vector<Candidate> pool = found[f];
+            if (pool.empty())
+                for (const auto& t : takes)
+                    if (! taken (&t, f))
+                        pool.push_back ({ &t, 0.0, false });
+
+            const Candidate* best = nullptr;
+            double bestGap = bornWithin, second = bornWithin;
+            for (const auto& c : pool)
+            {
+                if (c.take->createdAt <= 0.0)
+                    continue;
+                const auto gap = std::abs (c.take->createdAt - born[f]);
+                if (gap < bestGap)
+                {
+                    second = bestGap;
+                    bestGap = gap;
+                    best = &c;
+                }
+                else
+                {
+                    second = std::min (second, gap);
+                }
+            }
+
+            auto chosen = best != nullptr && second - bestGap > 2.0 ? std::vector<Candidate> { *best } : std::vector<Candidate> {};
+            found[f] = std::move (chosen);
+        }
+
+        if (found[f].size() == 1)
+            out.push_back ({ files[f], found[f].front().take->takeId, found[f].front().lead, found[f].front().leadKnown });
+    }
+
+    return out;
 }
 
 const TakeProfile* SyncController::findTake (int32_t id, bool isTag) const
@@ -162,12 +280,17 @@ SlotTarget SyncController::update (double wallNow)
     }
 
     std::vector<TakeProfile> localTakes;
-    bool fresh = false;
+    bool fresh = false, rebind = false;
     {
         const std::scoped_lock sl (takeLock);
         localTakes = takes;
         fresh = std::exchange (takesChanged, false);
+        rebind = std::exchange (timelineChanged, false);
+        localTimeline = timeline;
     }
+
+    if (fresh || rebind)
+        bindings = localTimeline != nullptr ? bindFiles (*localTimeline, localTakes) : std::vector<FileBinding> {};
 
     if (fresh)
     {
@@ -294,6 +417,60 @@ SlotTarget SyncController::update (double wallNow)
         }
     }
 
+    // Live's arrangement, while the Live script reports it: the clip under the playhead decides. No clip, a deactivated
+    // one or a silenced track is black at once; a clip whose file is a known take shows that take, placed by where the
+    // clip's file starts, so a cut switches on the frame. A clip whose file is no known take leaves the take and its
+    // position to the sources that listen.
+    const auto tlOn = localTimeline != nullptr && localTimeline->arrangement;
+    const TimelineClip* here = nullptr;
+    if (tlOn)
+        for (const auto& c : localTimeline->clips)
+            if (! c.lane && hostNow >= c.hostStart && hostNow < c.hostEnd)
+                here = &c;
+    const auto tlGap = tlOn && (here == nullptr || ! here->active || ! localTimeline->audible);
+    auto timelinePlaced = false;
+
+    if (tlOn && here != nullptr && here->active)
+    {
+        const FileBinding* b = nullptr;
+        for (const auto& x : bindings)
+            if (x.file == here->file)
+                b = &x;
+
+        if (const auto* t = b != nullptr ? lookup (b->takeId, false) : nullptr; t != nullptr)
+        {
+            const auto home = t->ranges.empty() ? -t->hostStartSeconds
+                                                : t->ranges.front().takeAtHostStart - t->ranges.front().hostStart;
+            auto offset = home;
+            auto exact = false;
+            if (here->originKnown && b->leadKnown)
+            {
+                offset = -(here->origin + b->lead);
+                exact = true;
+            }
+
+            // Where the file's start is not known exactly, a source that heard this take keeps its own position.
+            const auto heard = placement.valid && placement.takeId == t->takeId && placement.kind != SyncKind::timeline
+                            && placement.kind != SyncKind::hostPosition;
+            if (exact || ! heard)
+            {
+                if (! (placement.valid && placement.takeId == t->takeId && placement.kind == SyncKind::timeline
+                       && std::abs (placement.offset - offset) < 1.0e-6))
+                {
+                    placement = { true, t->takeId, offset, SyncKind::timeline };
+                    pending = {};
+                    pendingCount = 0;
+                    changePath = TakeChange::timeline;
+                }
+            }
+            timelinePlaced = true;
+        }
+        else if (placement.kind == SyncKind::timeline)
+        {
+            placement = {}; // a clip of a file that is no known take: the take placed for the last clip is not it
+        }
+    }
+
     // Host position prior: used only while nothing has been heard yet.
     const TakeProfile* active = &localTakes.front();
     if (! placement.valid && prior != nullptr)
@@ -368,6 +545,9 @@ SlotTarget SyncController::update (double wallNow)
                         && (digitalSilentSince >= 0.0 || (signalSince >= 0.0 && wallNow - signalSince < gapLeave)
                             || (judgeMatch && ! matchedNow && ! movedMatch));
 
+    // With Live's arrangement known, a gap is exactly where no clip plays.
+    const auto gapNow = tlOn && gapsOn ? tlGap : (longSilence || longMismatch || stayInGap);
+
     if (! placement.valid)
     {
         out.takeId = active->takeId;
@@ -378,7 +558,6 @@ SlotTarget SyncController::update (double wallNow)
             fingerprint->setShown (-1, 0.0);
 
         // Nothing placed yet: digital silence, or sound that is no take, means no clip plays.
-        const auto gapNow = longSilence || longMismatch || stayInGap;
         if (gapNow != inGap)
         {
             inGap = gapNow;
@@ -407,7 +586,7 @@ SlotTarget SyncController::update (double wallNow)
     const auto D = take->durationSeconds;
     if (D > 0.0 && pos >= D)
     {
-        if (hs.playing && hs.level > silenceLevel)
+        if (hs.playing && hs.level > silenceLevel && ! timelinePlaced)
         {
             pos = std::fmod (pos, D);
             out.predictedWrap = 1;
@@ -420,7 +599,7 @@ SlotTarget SyncController::update (double wallNow)
     }
 
     // Audio has stopped while the take's own audio has not: the clip was trimmed or split here.
-    if (hs.playing && hs.level <= silenceLevel && envelopeAt (*take, pos) > 4.0 * silenceLevel)
+    if (hs.playing && hs.level <= silenceLevel && envelopeAt (*take, pos) > 4.0 * silenceLevel && ! timelinePlaced)
     {
         if (silentSince < 0.0)
             silentSince = wallNow;
@@ -442,8 +621,6 @@ SlotTarget SyncController::update (double wallNow)
     // clip at all is digital silence. So digital silence for gapAfter means no clip plays here: black, whatever take
     // was placed and however it was placed. The picture comes back once sound has lasted gapLeave.
     {
-        const auto gapNow = longSilence || longMismatch || stayInGap;
-
         if (gapNow != inGap)
         {
             inGap = gapNow;
@@ -491,6 +668,8 @@ SlotTarget SyncController::update (double wallNow)
             out.status = SyncStatus::lost;
         else if (placement.kind == SyncKind::hostPosition)
             out.status = SyncStatus::prior;
+        else if (placement.kind == SyncKind::timeline)
+            out.status = SyncStatus::locked;
         else
             out.status = SyncStatus::locked;
     }

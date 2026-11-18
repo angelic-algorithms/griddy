@@ -1,6 +1,7 @@
 #include <juce_core/juce_core.h>
 
 #include "engine/HostClock.h"
+#include "engine/LiveTimeline.h"
 #include "engine/SeqLock.h"
 #include "engine/SpscRing.h"
 #include "engine/SyncController.h"
@@ -513,8 +514,102 @@ struct SyncControllerTests : juce::UnitTest
     }
 };
 
+struct LiveTimelineTests : juce::UnitTest
+{
+    LiveTimelineTests() : UnitTest ("Live timeline", "Griddy") {}
+
+    static TakeProfile take (int id, double hostStart, double createdAt)
+    {
+        TakeProfile p;
+        p.takeId = id;
+        p.hostStartSeconds = hostStart;
+        p.durationSeconds = 10.0;
+        p.createdAt = createdAt;
+        p.ranges.push_back ({ hostStart, hostStart + 10.0, 0.0 });
+        return p;
+    }
+
+    static TimelineClip clip (int file, double start, double end, double origin, double born = 0.0, bool lane = false)
+    {
+        TimelineClip c;
+        c.file = file;
+        c.hostStart = start;
+        c.hostEnd = end;
+        c.originKnown = true;
+        c.origin = origin;
+        c.fileBorn = born;
+        c.lane = lane;
+        return c;
+    }
+
+    static int32_t takeOf (const std::vector<SyncController::FileBinding>& b, int file)
+    {
+        for (const auto& x : b)
+            if (x.file == file)
+                return x.takeId;
+        return -1;
+    }
+
+    void runTest() override
+    {
+        beginTest ("files bind to the take that started with them");
+        {
+            SlotTimeline tl;
+            tl.clips = { clip (0, 4.0, 6.0, 4.0), clip (1, 6.0, 8.0, 3.0) };
+            const auto b = SyncController::bindFiles (tl, { take (1, 4.1, 0.0), take (2, 3.05, 0.0) });
+            expectEquals ((int) takeOf (b, 0), 1);
+            expectEquals ((int) takeOf (b, 1), 2);
+            for (const auto& x : b)
+                if (x.file == 0)
+                    expectWithinAbsoluteError (x.lead, 0.1, 1.0e-9);
+        }
+
+        beginTest ("takes begun from the same spot are told apart by when the file was created");
+        {
+            SlotTimeline tl;
+            tl.clips = { clip (0, 4.0, 6.0, 4.0, 1000.0), clip (1, 6.0, 8.0, 4.0, 1060.0) };
+            const auto b = SyncController::bindFiles (tl, { take (1, 4.05, 1000.4), take (2, 4.02, 1060.3) });
+            expectEquals ((int) takeOf (b, 0), 1);
+            expectEquals ((int) takeOf (b, 1), 2);
+        }
+
+        beginTest ("with nothing to tell them apart, a file stays unbound and the sound decides");
+        {
+            SlotTimeline tl;
+            tl.clips = { clip (0, 4.0, 6.0, 4.0), clip (1, 6.0, 8.0, 4.0) };
+            const auto b = SyncController::bindFiles (tl, { take (1, 4.05, 0.0), take (2, 4.02, 0.0) });
+            expect (b.empty());
+        }
+
+        beginTest ("a moved clip's file binds through its clip left in a take lane");
+        {
+            SlotTimeline tl;
+            tl.clips = { clip (0, 20.0, 22.0, 16.0), clip (0, 4.0, 14.0, 4.0, 0.0, true) };
+            const auto b = SyncController::bindFiles (tl, { take (1, 4.0, 0.0) });
+            expectEquals ((int) takeOf (b, 0), 1);
+        }
+
+        beginTest ("the script's file parses");
+        {
+            LiveTimeline t;
+            expect (parseLiveTimeline (R"({"version":1,"written":1234.5,"tracks":[{"name":"Vox","slot":"2","audible":true,"arrangement":true,
+                "clips":[{"start":1.0,"end":3.0,"active":true,"file":0,"origin":0.5,"born":99.0},{"start":3.0,"end":4.0,"active":false,"lane":true},
+                {"start":5.0,"end":6.0,"file":1,"origin":null}]}]})", t));
+            expectEquals (t.written, 1234.5);
+            expectEquals ((int) t.tracks.size(), 1);
+            expectEquals (t.tracks[0].slot, 1);
+            expectEquals ((int) t.tracks[0].timeline.clips.size(), 3);
+            expect (t.tracks[0].timeline.clips[0].originKnown && t.tracks[0].timeline.clips[0].fileBorn > 98.0);
+            expect (! t.tracks[0].timeline.clips[1].active && t.tracks[0].timeline.clips[1].lane && t.tracks[0].timeline.clips[1].file == -1);
+            expect (! t.tracks[0].timeline.clips[2].originKnown);
+            expect (! parseLiveTimeline ("{\"version\":2}", t));
+        }
+    }
+};
+
 static PrimitiveTests primitiveTests;
 static EmbeddedSyncTests embeddedSyncTests;
 static FingerprintTests fingerprintTests;
 static TakeHistoryTests takeHistoryTests;
 static SyncControllerTests syncControllerTests;
+static LiveTimelineTests liveTimelineTests;

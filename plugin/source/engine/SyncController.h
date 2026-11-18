@@ -42,7 +42,7 @@ struct SlotTarget
 /** How a slot's take changed, for griddy.log. */
 struct TakeChange
 {
-    enum Path : uint8_t { aligned, fingerprint, embedded, prior, silence, gapStart, gapEnd };
+    enum Path : uint8_t { aligned, fingerprint, embedded, prior, silence, gapStart, gapEnd, timeline };
     int32_t oldTake = -1, newTake = -1;
     int16_t oldPass = -1, newPass = -1;
     double hostSeconds = 0.0;
@@ -68,6 +68,29 @@ struct TakeProfile
     /** False when the take recorded no sound (Live's Monitor was off): it can never match, so it never goes black
         for not matching. */
     bool hasSound = true;
+
+    /** When recording began, seconds since the epoch: tells apart takes that started at the same host time. */
+    double createdAt = 0.0;
+};
+
+/** One clip on a Griddy track in Live's arrangement, as the Live script reports it. Host seconds throughout. */
+struct TimelineClip
+{
+    double hostStart = 0.0, hostEnd = 0.0;
+    bool active = true;     // plays sound: not deactivated, gain above zero
+    bool lane = false;      // on a take lane, not the main lane: never plays, only helps tell which take a file is
+    int file = -1;          // which recorded file, numbered per track; -1 for a clip with no file
+    bool originKnown = false;
+    double origin = 0.0;    // host time where the file's first sample would sit; unknown for a looped clip
+    double fileBorn = 0.0;  // when the file was created, seconds since the epoch; 0 when unknown
+};
+
+/** Every clip on one slot's track, with what the whole track does. */
+struct SlotTimeline
+{
+    std::vector<TimelineClip> clips;
+    bool audible = true;     // the track is not muted, and not silenced by another track's solo
+    bool arrangement = true; // the track plays the arrangement, not a Session clip
 };
 
 /** Per slot: combines the three sources into one steady answer.
@@ -86,6 +109,14 @@ public:
     SyncController (const HostClock& host, ClipSource* embedded, ClipSource* fingerprint, HostPositionClipSource* prior);
 
     void setTakes (std::vector<TakeProfile> takes);
+
+    /** Live's arrangement for this slot, or null when the Live script is not running. While set, it decides where the
+        picture is black and, for a clip whose file is known to be a take, which take shows and where, to the frame. */
+    void setTimeline (std::shared_ptr<const SlotTimeline> t);
+
+    /** Which take a recorded file is. Worked out from where the file's clips sit and when it was created. */
+    struct FileBinding { int file = -1; int32_t takeId = -1; double lead = 0.0; bool leadKnown = false; };
+    static std::vector<FileBinding> bindFiles (const SlotTimeline& t, const std::vector<TakeProfile>& takes);
 
     /** Computes the target for this moment. wallNow is steadyNowSeconds(). */
     SlotTarget update (double wallNow);
@@ -127,6 +158,10 @@ private:
     mutable std::mutex takeLock;
     std::vector<TakeProfile> takes;
     bool takesChanged = false; // guarded by takeLock; update() starts over from the new takes
+    std::shared_ptr<const SlotTimeline> timeline; // guarded by takeLock
+    bool timelineChanged = false;                 // guarded by takeLock
+    std::shared_ptr<const SlotTimeline> localTimeline;
+    std::vector<FileBinding> bindings;
 
     Placement placement;
     uint32_t lastEmbeddedSerial = 0, lastFingerprintSerial = 0;

@@ -4,6 +4,7 @@
 #include "SessionStore.h"
 #include "TransportState.h"
 #include "GridExport.h"
+#include "LiveTimeline.h"
 #include "VideoEngine.h"
 
 #include <juce_audio_basics/juce_audio_basics.h>
@@ -210,6 +211,7 @@ private:
     void disarmLater (Member* member);
     void purgeLater();
     void logTakeChanges (PlaybackEngine& e, int slot);
+    void updateTimeline (PlaybackEngine& e); // hub thread: reads what the Live script wrote and hands it to the slots
     void logTransport (Member& m, PlaybackEngine* e);
     void openSaved (const juce::String& savedId, const std::optional<std::vector<int32_t>>& savedTakes);
     void switchSession (const juce::String& id, const juce::String& why);
@@ -279,6 +281,12 @@ private:
     juce::MemoryBlock previewJpeg;
     std::atomic<int64_t> previewSerial { 0 };
     int tick = 0;
+
+    // Live's arrangement from the Live script; hub thread only.
+    LiveTimeline liveTimeline;
+    juce::Time timelineModified;
+    std::array<std::shared_ptr<const SlotTimeline>, maxSlots> timelines;
+    const PlaybackEngine* timelineEngine = nullptr;
     std::mutex logLock;
     std::unique_ptr<juce::FileOutputStream> logFile; // guarded by logLock
     juce::File logFolder;
