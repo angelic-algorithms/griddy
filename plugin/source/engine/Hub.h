@@ -160,6 +160,11 @@ public:
     bool retakeTake (int slot, int takeId);
     bool restoreTake (int slot, int takeId);
     bool setSlip (int slot, int takeId, double seconds);
+    /** A press of REC or Arm on this instance, for the Live script: "record", "stop", "arm" or "disarm".
+        False when the script does not run, or the instance has no slot. */
+    bool requestInLive (Member* member, const juce::String& action);
+    /** The Live script is running: its arrangement file was rewritten in the last few seconds. */
+    bool liveScriptRunning() const noexcept { return liveScript.load(); }
     /** The host's name for an instance's track. Message thread. */
     void setTrackName (Member* member, const juce::String& name);
 
@@ -254,6 +259,8 @@ private:
     std::array<std::atomic<bool>, maxSlots> slotRecording;
     std::array<std::atomic<double>, maxSlots> recordStartPpq {};
     std::atomic<uint32_t> liveArmedMask { 0 }; // slots whose track Live has armed, from the Live script; display only
+    std::atomic<uint32_t> playingMask { 0 };   // slots whose instance's host is playing
+    std::atomic<bool> liveScript { false };    // the Live script's arrangement file is fresh; then Live owns the arm
     std::atomic<uint32_t> armedMask { 0 }; // slots whose track is armed, worked out with the claims // where the take in progress began, for the takes timeline
     std::array<std::atomic<bool>, maxSlots> resetRequested;
     std::array<std::atomic<uint64_t>, maxSlots> droppedFrames, droppedAudio;
@@ -287,6 +294,10 @@ private:
     juce::Time timelineModified;
     std::array<std::shared_ptr<const SlotTimeline>, maxSlots> timelines;
     const PlaybackEngine* timelineEngine = nullptr;
+
+    // Presses for the Live script; message thread only.
+    std::vector<LiveRequest> liveRequests;
+    int64_t lastRequestId = 0;
     std::mutex logLock;
     std::unique_ptr<juce::FileOutputStream> logFile; // guarded by logLock
     juce::File logFolder;

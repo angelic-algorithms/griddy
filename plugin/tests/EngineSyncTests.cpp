@@ -604,6 +604,30 @@ struct LiveTimelineTests : juce::UnitTest
             expect (! t.tracks[0].timeline.clips[2].originKnown);
             expect (! parseLiveTimeline ("{\"version\":2}", t));
         }
+
+        beginTest ("requests for the Live script: what tests/live_script_test.py reads");
+        {
+            LiveRequest r;
+            r.id = 1700000000123;
+            r.slot = 2;
+            r.track = "Vox";
+            r.action = "record";
+            r.at = 1700000000.5;
+            const auto v = juce::JSON::parse (liveRequestsJson ({ r }));
+            expectEquals ((int) v.getProperty ("version", 0), 1);
+            const auto* list = v.getProperty ("requests", {}).getArray();
+            expect (list != nullptr && list->size() == 1);
+            if (list != nullptr && list->size() == 1)
+            {
+                const auto& x = list->getReference (0);
+                expect ((int64_t) x.getProperty ("id", 0) == r.id);
+                expectEquals ((int) x.getProperty ("slot", 0), 3); // 1 based, as Griddy's Slot parameter shows it
+                expectEquals (x.getProperty ("track", {}).toString(), juce::String ("Vox"));
+                expectEquals (x.getProperty ("action", {}).toString(), juce::String ("record"));
+                expectWithinAbsoluteError ((double) x.getProperty ("at", 0.0), 1700000000.5, 1.0e-3);
+            }
+            expect (liveRequestsFile().getParentDirectory() == liveTimelineFile().getParentDirectory());
+        }
     }
 };
 

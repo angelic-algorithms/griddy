@@ -14,6 +14,31 @@ juce::File liveTimelineFile()
    #endif
 }
 
+juce::File liveRequestsFile()
+{
+    return liveTimelineFile().getSiblingFile ("live-requests.json");
+}
+
+juce::String liveRequestsJson (const std::vector<LiveRequest>& requests)
+{
+    juce::Array<juce::var> list;
+    for (const auto& r : requests)
+    {
+        auto* o = new juce::DynamicObject();
+        o->setProperty ("id", r.id);
+        o->setProperty ("slot", r.slot + 1);
+        o->setProperty ("track", r.track);
+        o->setProperty ("action", r.action);
+        o->setProperty ("at", r.at);
+        list.add (juce::var (o));
+    }
+
+    auto* root = new juce::DynamicObject();
+    root->setProperty ("version", 1);
+    root->setProperty ("requests", list);
+    return juce::JSON::toString (juce::var (root), true);
+}
+
 bool parseLiveTimeline (const juce::String& json, LiveTimeline& out)
 {
     const auto v = juce::JSON::parse (json);

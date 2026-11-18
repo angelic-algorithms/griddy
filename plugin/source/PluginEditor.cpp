@@ -112,6 +112,10 @@ juce::WebBrowserComponent::Options GriddyEditor::makeBrowserOptions()
         {
             complete (args.size() > 1 && hub.swapCells ((int) args[0], (int) args[1]));
         })
+        .withNativeFunction ("requestInLive", [this] (const juce::Array<juce::var>& args, auto complete)
+        {
+            complete (args.size() > 0 && hub.requestInLive (processor.getMember(), args[0].toString()));
+        })
         .withNativeFunction ("keepTake", [this] (const juce::Array<juce::var>& args, auto complete)
         {
             complete (args.size() > 1 && hub.keepTake ((int) args[0], (int) args[1]));

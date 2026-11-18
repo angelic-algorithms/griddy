@@ -162,7 +162,7 @@ void Hub::settleSlots()
     std::vector<Show> toShow;
     {
         const std::scoped_lock sl (memberLock);
-        uint32_t mask = 0, armed = 0, liveArmed = 0;
+        uint32_t mask = 0, armed = 0, liveArmed = 0, playing = 0;
         int minSlot = maxSlots;
         Member* lead = nullptr;
         int cameras = 1;
@@ -253,6 +253,8 @@ void Hub::settleSlots()
                     armed |= 1u << s;
                 if (! m->isMaster && m->controls.trackArmed != nullptr && m->controls.trackArmed->load() > 0.5f)
                     liveArmed |= 1u << s;
+                if (m->playing.load())
+                    playing |= 1u << s;
                 if (s < minSlot)
                 {
                     minSlot = s;
@@ -268,6 +270,7 @@ void Hub::settleSlots()
         claimedMask = mask;
         armedMask = armed;
         liveArmedMask = liveArmed;
+        playingMask = playing;
         leader = lead;
         activeSlots = juce::jlimit (1, maxSlots, cameras);
     }
@@ -489,16 +492,26 @@ bool Hub::resetSlot (int slot)
     if (! juce::isPositiveAndBelow (slot, maxSlots))
         return false;
 
-    // Arm off first, so the take in progress ends and nothing starts again.
+    // Arm off first, so the take in progress ends and nothing starts again. With the Live script the arm is Live's,
+    // so Live is asked to stop recording instead; the reset waits for the take to end.
     std::function<void (bool)> armFn;
+    Member* owner = nullptr;
     {
         const std::scoped_lock sl (memberLock);
         for (auto& m : members)
-            if (m->slot.load() == slot)
+            if (m->slot.load() == slot && ! m->isMaster)
+            {
                 armFn = m->controls.setArmParameter;
+                owner = m.get();
+            }
     }
 
-    if (armFn)
+    if (liveScript.load())
+    {
+        if (owner != nullptr && slotRecording[(size_t) slot].load())
+            requestInLive (owner, "stop");
+    }
+    else if (armFn)
         armFn (false);
 
     log ("slot " + juce::String (slot + 1) + ": Reset slot pressed");
@@ -617,7 +630,9 @@ void Hub::processBlock (Member& member, const juce::AudioBuffer<float>& buffer, 
         member.takeDone.store (false, std::memory_order_relaxed);
 
     // The one rule: armed and playing records one take. Live sends no record flag, so its record button cannot be the gate.
-    const auto want = slot >= 0 && armed && t.isPlaying && ! member.takeDone.load (std::memory_order_relaxed);
+    // With the Live script, the arm is Live's own "armed and recording", so it ends the take itself and may record again.
+    const auto want = slot >= 0 && armed && t.isPlaying
+                   && (liveScript.load (std::memory_order_relaxed) || ! member.takeDone.load (std::memory_order_relaxed));
 
     if (want && ! member.wantRecording.load (std::memory_order_relaxed))
     {
@@ -963,9 +978,11 @@ void Hub::controlTick()
                 m.recording = false;
                 slotBusy[(size_t) slot] = true;
 
-                // Every play while armed would record, so the take ends the arm.
+                // Every play while armed would record, so the take ends the arm. With the Live script the arm is Live's,
+                // and writing it here as well made the two fight over it, starting and ending a take every tenth of a second.
                 m.takeDone = true;
-                disarmLater (&m);
+                if (! liveScript.load())
+                    disarmLater (&m);
 
                 // Stopping writes the last files and take.json; rebuilding the slot analyses its audio.
                 worker.addJob ([this, slot]
@@ -1367,10 +1384,13 @@ void Hub::drawPreview()
 
     compositor.render (output, cells, [&] (int slot) -> std::shared_ptr<const VideoFrame>
     {
-        // A slot being recorded, or armed for a new take with none waiting in review, shows its live camera.
-        // Others show their take, or the live camera if they have none.
+        // Recording shows the live camera, and so does a slot armed for a new take with none waiting in review: armed
+        // by Griddy, or armed in Live while Live is stopped (like Live's auto monitoring, which plays the clips while
+        // Live plays). Others show their take, or the live camera if they have none. The tile overlay uses the same rule.
+        const auto bit = 1u << slot;
         if (slotRecording[(size_t) slot].load()
-            || (((armedMask.load() >> slot) & 1u) != 0 && ! e->slotHasReview (slot)))
+            || (! e->slotHasReview (slot)
+                && ((armedMask.load() & bit) != 0 || ((liveArmedMask.load() & bit) != 0 && (playingMask.load() & bit) == 0))))
             return videoEngine.latestFrame (slot);
 
         if (const auto shown = e->shown (slot); shown != nullptr && shown->frame != nullptr)
@@ -1445,6 +1465,10 @@ void Hub::updateTimeline (PlaybackEngine& e)
     }
 
     const auto fresh = now - liveTimeline.written < 3.0 && file.existsAsFile();
+    if (fresh != liveScript.load())
+        log (fresh ? "the Live script is running: Live owns the arm, and REC and Arm ask Live"
+                   : "the Live script is not running: REC arms Griddy itself");
+    liveScript = fresh;
 
     std::array<juce::String, maxSlots> names;
     uint32_t mine = 0;
@@ -1556,6 +1580,41 @@ void Hub::setTrackName (Member* member, const juce::String& name)
             m->trackName = name;
 }
 
+bool Hub::requestInLive (Member* member, const juce::String& action)
+{
+    if (! liveScript.load() || member == nullptr || member->isMaster.load())
+        return false;
+
+    LiveRequest r;
+    {
+        const std::scoped_lock sl (memberLock);
+        r.slot = member->slot.load();
+        r.track = member->trackName;
+    }
+    if (r.slot < 0)
+        return false;
+
+    // Milliseconds since the epoch, so a restarted Griddy never reuses an id the script has already done.
+    r.id = juce::jmax (lastRequestId + 1, (int64_t) juce::Time::currentTimeMillis());
+    lastRequestId = r.id;
+    r.action = action;
+    r.at = (double) juce::Time::currentTimeMillis() / 1000.0;
+
+    liveRequests.push_back (r);
+    if (liveRequests.size() > 8)
+        liveRequests.erase (liveRequests.begin());
+
+    // Written whole and moved into place, so the script never reads half a file.
+    const auto file = liveRequestsFile();
+    file.getParentDirectory().createDirectory();
+    const auto temporary = file.getSiblingFile (file.getFileName() + ".tmp");
+    if (! temporary.replaceWithText (liveRequestsJson (liveRequests)) || ! temporary.moveFileTo (file))
+        return false;
+
+    log ("slot " + juce::String (r.slot + 1) + ": asks Live to " + action);
+    return true;
+}
+
 std::array<float, 9> Hub::slotLevels() const
 {
     std::array<float, 9> levels {};
@@ -1615,6 +1674,7 @@ juce::var Hub::getStatus (const Member* member) const
     }
     obj->setProperty ("recordHint", hint);
     obj->setProperty ("hostRecording", member != nullptr && member->hostRecording.load());
+    obj->setProperty ("liveScript", liveScript.load());
     obj->setProperty ("claimedMask", (int) claimedMask.load());
     obj->setProperty ("master", member != nullptr && member->isMaster.load());
     obj->setProperty ("layout", layoutToVar());

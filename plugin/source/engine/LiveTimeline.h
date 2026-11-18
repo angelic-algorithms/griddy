@@ -30,4 +30,20 @@ bool parseLiveTimeline (const juce::String& json, LiveTimeline& out);
 
 bool operator== (const SlotTimeline& a, const SlotTimeline& b);
 
+/** A press of Griddy's REC or Arm, for the Live script to do in Live. */
+struct LiveRequest
+{
+    int64_t id = 0;       // increasing, also across restarts, so the script does each request once
+    int slot = -1;        // 0 based
+    juce::String track;   // the track's name, for a script that cannot read the slot
+    juce::String action;  // "record", "stop", "arm" or "disarm"
+    double at = 0.0;      // seconds since the epoch; the script drops a request older than a few seconds
+};
+
+/** Where Griddy writes requests for the Live script, next to the arrangement file. */
+juce::File liveRequestsFile();
+
+/** The file's text for the most recent requests. */
+juce::String liveRequestsJson (const std::vector<LiveRequest>& requests);
+
 } // namespace griddy
