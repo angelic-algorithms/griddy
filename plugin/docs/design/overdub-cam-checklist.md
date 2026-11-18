@@ -150,7 +150,8 @@ Also changed: a new set starts like the mockup, an orange frame 6 thick with cor
 ## Comping
 - Takes: a new take over a review take archives it; Retake still discards. The sync recognises the newest 20 takes or 30 minutes per slot; the Slot tab lists five, then Show all; past the cap "Too old to follow comps". Setup shows the session's disk use.
 - Comp detection: aligned 100 ms correlation every 25 ms on the sync worker, 1.25 times for two windows, newest wins a tie; moved pieces clear the fingerprint votes; loop passes are candidates.
-- Gaps: black after 150 ms of digital silence where no clip plays, back on 25 ms of sound; never for a silent take, an unowned slot, Live stopped, or an armed or recording slot. A take's end while playing is now black.
+- Gaps: black after 150 ms of digital silence where no clip plays, back on 25 ms of sound, with no exceptions for silent takes; never for an unowned slot, Live stopped, or an armed or recording slot. A take's end while playing is black.
+- A take that recorded no sound: a note in its take row and a log line.
 - What is playing: TAKE N or NO CLIP chip on tiles (with aria labels, not in the export), Playing in the Slot tab, the take number at the playhead in the timeline, a griddy.log line for every change.
 - Follow lines: "Follows Live's position. Put Griddy on this track to follow edits and comps." in the master view and the Slot tab; "This take listened to TRACK NAME. It follows edits on that track."
 - GRIDDY_NO_COMP switches comp detection and black gaps off (debug only).
