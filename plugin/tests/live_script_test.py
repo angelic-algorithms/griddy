@@ -1,8 +1,10 @@
 # Drives the Griddy control surface script (live/Griddy) with a fake Live: python3 -B tests/live_script_test.py
 # It checks the link's rules; whether Live's real objects behave like these fakes is only known by trying it in Live.
 
+import json
 import os
 import sys
+import tempfile
 import types
 
 failures = 0
@@ -64,12 +66,24 @@ class Track(Listenable):
     def __init__(self, name, devices, monitor=1):
         Listenable.__init__(self)
         self.name, self.devices, self.arm, self.can_be_armed, self.current_monitoring_state = name, devices, False, True, monitor
+        self.arrangement_clips, self.take_lanes, self.mute, self.muted_via_solo, self.playing_slot_index = [], [], False, False, -1
+
+
+class Clip(object):
+    def __init__(self, start, end, path, marker=0.0, muted=False, gain=0.5, warping=True, looping=False, loop_end=1000.0):
+        self.is_audio_clip, self.start_time, self.end_time, self.file_path = True, start, end, path
+        self.start_marker, self.muted, self.gain, self.warping, self.looping, self.loop_end = marker, muted, gain, warping, looping, loop_end
+
+
+class TakeLane(object):
+    def __init__(self, clips):
+        self.arrangement_clips = clips
 
 
 class Song(Listenable):
     def __init__(self, tracks):
         Listenable.__init__(self)
-        self.tracks, self.record_mode, self.session_record, self.is_playing = tracks, False, False, False
+        self.tracks, self.record_mode, self.session_record, self.is_playing, self.tempo = tracks, False, False, False, 120.0
 
     def __setattr__(self, k, v):
         object.__setattr__(self, k, v)
@@ -105,6 +119,9 @@ class FakeControlSurface(object):
     def log_message(self, *a):
         pass
 
+    def update_display(self):
+        pass
+
     def disconnect(self):
         pass
 
@@ -128,6 +145,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 import Griddy as script  # noqa: E402
 
 link = sys.modules["Griddy.Griddy"]  # the module; the package name Griddy also names the class
+link.TIMELINE_PATH = os.path.join(tempfile.mkdtemp(), "Griddy", "live-timeline.json")
 
 griddy = lambda: Device("Griddy", "PluginDevice", ["Slot", "Cameras", "Record arm", "Master", "Track armed in Live"])
 vocals = Track("Vocals", [griddy()], monitor=2)
@@ -198,7 +216,35 @@ renamed = Device("My camera", "PluginDevice", ["Slot", "Cameras", "Record arm"])
 check(link.griddy_arm(renamed) is not None, "a renamed Griddy is still found by its parameters")
 check(link.griddy_arm(Device("Other", "PluginDevice", ["Record arm"])) is None, "another plugin with a Record arm is not Griddy")
 
+# The arrangement, as Griddy reads it. At 120 BPM a beat is half a second.
+vocals.arrangement_clips = [
+    Clip(8.0, 12.0, "/takes/a.wav"),                       # from beat 8, the file from its start: origin 4 s
+    Clip(12.0, 14.0, "/takes/b.wav", marker=4.0),          # a piece of b from its beat 4: origin 4 s
+    Clip(14.0, 16.0, "/takes/a.wav", marker=6.0, muted=True),
+    Clip(16.0, 18.0, "/takes/b.wav", marker=8.0, gain=0.0),
+    Clip(18.0, 26.0, "/takes/a.wav", looping=True, loop_end=2.0),
+]
+vocals.take_lanes = [TakeLane([Clip(8.0, 24.0, "/takes/b.wav")])]
+surface.update_display()
+with open(link.TIMELINE_PATH) as f:
+    written = json.load(f)
+tracks = dict((t["name"], t) for t in written["tracks"])
+check(written["version"] == 1 and set(tracks) == set(["Vocals", "Keys"]), "the arrangement file lists every Griddy track and no other")
+clips = tracks["Vocals"]["clips"]
+check([c["start"] for c in clips[:5]] == [4.0, 6.0, 7.0, 8.0, 9.0] and clips[0]["end"] == 6.0, "clip edges are in seconds at the song's tempo")
+check(clips[0]["origin"] == 4.0 and clips[1]["origin"] == 4.0, "each clip says where its file starts")
+check(clips[0]["file"] == clips[2]["file"] and clips[0]["file"] != clips[1]["file"], "clips of one recording share a file number")
+check(clips[0]["active"] and not clips[2]["active"] and not clips[3]["active"], "a clip deactivated with 0 or at zero gain does not play")
+check("origin" not in clips[4], "a clip that loops past its loop end has no single file start")
+check(clips[5].get("lane") and not clips[0].get("lane"), "take lane clips are marked, to tell which take a file is")
+check(tracks["Vocals"]["audible"] and tracks["Vocals"]["arrangement"], "a playing track is audible and plays the arrangement")
+vocals.mute = True
+surface.update_display()
+with open(link.TIMELINE_PATH) as f:
+    check(not dict((t["name"], t) for t in json.load(f)["tracks"])["Vocals"]["audible"], "muting the track is written at once")
+
 surface.disconnect()
+check(not os.path.exists(link.TIMELINE_PATH), "disconnecting removes the arrangement file, so Griddy follows the sound again")
 check(not any(song._listeners.values()) and not any(vocals._listeners.values()), "disconnect removes every listener")
 
 print("LIVE SCRIPT TESTS PASSED" if failures == 0 else "LIVE SCRIPT TESTS FAILED (%d checks)" % failures)
