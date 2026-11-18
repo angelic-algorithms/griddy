@@ -69,7 +69,15 @@ class Track(Listenable):
 class Song(Listenable):
     def __init__(self, tracks):
         Listenable.__init__(self)
-        self.tracks, self.record_mode, self.session_record = tracks, False, False
+        self.tracks, self.record_mode, self.session_record, self.is_playing = tracks, False, False, False
+
+    def __setattr__(self, k, v):
+        object.__setattr__(self, k, v)
+        if k in ("record_mode", "session_record") and "_listeners" in self.__dict__:
+            self._notify(k)
+
+    def start_playing(self):
+        self.is_playing = True
 
 
 scheduled = []
@@ -142,17 +150,23 @@ song.set("record_mode", True)
 run_scheduled()
 check(arm.value == 1.0, "track armed and Live records: Griddy is armed")
 
-arm.value = 0.0  # the user clicks Griddy's own arm button off, or the plugin turns it off after a take
-run_scheduled()
-check(arm.value == 1.0, "Griddy's own arm follows Live's while Live records")
-
 song.set("record_mode", False)
 run_scheduled()
 check(arm.value == 0.0, "Live stops recording: Griddy is disarmed")
 
-arm.value = 1.0  # the user clicks Griddy's arm on while Live is not recording
+vocals.set("arm", False)
 run_scheduled()
-check(arm.value == 0.0, "Griddy cannot be armed on its own")
+song.is_playing = False
+arm.value = 1.0  # the user presses Griddy's REC with the track disarmed and Live stopped
+run_scheduled()
+check(vocals.arm and song.record_mode, "pressing Griddy's REC arms the track in Live and switches Live's record on")
+check(song.is_playing, "and starts Live playing, so it records")
+check(arm.value == 1.0, "and Griddy is armed with Live")
+
+arm.value = 0.0  # the user presses Griddy's REC again while Live records
+run_scheduled()
+check(not song.record_mode and arm.value == 0.0, "pressing REC again switches Live's record off, and Griddy disarms")
+check(vocals.arm, "the track stays armed in Live, as after Live's own record button")
 
 song.set("session_record", True)
 run_scheduled()

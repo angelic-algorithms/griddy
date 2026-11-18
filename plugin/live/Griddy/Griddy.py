@@ -1,5 +1,7 @@
 # Links Griddy's Record arm to Live: a track's Griddy records only while that track is armed in Live and Live records,
-# so every Griddy take has an audio clip in Live to follow. Griddy's own arm button follows Live's.
+# so every Griddy take has an audio clip in Live to follow. Griddy's own arm follows Live's, and pressing Griddy's REC
+# asks Live: it arms that track, switches Live's record button on and starts playback if Live is stopped. Pressing REC
+# again while Live records switches Live's record button off.
 #
 # Live never tells a plugin whether its track is armed or whether Live records, so this runs as a control surface
 # script (Settings, Link, Tempo & MIDI, Control Surface: Griddy), which can see both and set Griddy's parameter.
@@ -31,6 +33,8 @@ class Griddy(ControlSurface):
         ControlSurface.__init__(self, c_instance)
         self._listeners = []  # (remove function, listener) pairs to undo on disconnect
         self._pending = False
+        self._set_by_us = {}  # id(parameter) -> the value this script wants it to have; anything else is a press
+        self._requests = []   # (track, wants recording) from presses of Griddy's REC
         with self.component_guard():
             song = self.song()
             self._listen(song, "tracks", self._rebuild)
@@ -47,13 +51,15 @@ class Griddy(ControlSurface):
         has = getattr(subject, "%s_has_listener" % name)
         if not has(fn):
             add(fn)
-            self._listeners.append((remove, has, fn))
+            self._listeners.append((subject, remove, has, fn))
 
     def _forget_all(self, keep_song=False):
         kept = []
-        for remove, has, fn in self._listeners:
-            if keep_song and fn in (self._rebuild, self._request_sync):
-                kept.append((remove, has, fn))
+        song = self.song()
+        for entry in self._listeners:
+            subject, remove, has, fn = entry
+            if keep_song and subject is song:
+                kept.append(entry)
                 continue
             try:
                 if has(fn):
@@ -73,8 +79,17 @@ class Griddy(ControlSurface):
             for device in track.devices:
                 arm = griddy_arm(device)
                 if arm is not None:
-                    self._listen(arm, "value", self._request_sync)
+                    self._listen(arm, "value", self._pressed(track, arm))
         self._request_sync()
+
+    def _pressed(self, track, arm):
+        """A listener for one Griddy's Record arm. A change this script did not make is the user pressing REC."""
+        def listener():
+            if self._set_by_us.get(id(arm)) != arm.value:
+                self._requests.append((track, arm.value > (arm.min + arm.max) / 2.0))
+            self._request_sync()
+        listener.__name__ = "griddy_arm_%d" % id(arm)
+        return listener
 
     def _rebuild_later(self):
         # Live does not allow changes from inside a notification; rebuilding listeners is safe a tick later too.
@@ -93,6 +108,24 @@ class Griddy(ControlSurface):
 
     def _sync(self):
         self._pending = False
+        song = self.song()
+
+        # Presses of Griddy's REC become Live's: record on this track, or stop recording.
+        requests, self._requests = self._requests, []
+        for track, wants in requests:
+            if wants and not (track.arm and self._recording()):
+                if not track.arm:
+                    track.arm = True
+                if not song.record_mode:
+                    song.record_mode = True
+                if not song.is_playing:
+                    song.start_playing()
+                self.log_message("Griddy: REC on %s, so Live arms it and records" % track.name)
+            elif not wants and track.arm and self._recording():
+                song.record_mode = False
+                song.session_record = False
+                self.log_message("Griddy: REC off on %s, so Live stops recording" % track.name)
+
         recording = self._recording()
         for track in self.song().tracks:
             if not getattr(track, "can_be_armed", False):
@@ -108,6 +141,7 @@ class Griddy(ControlSurface):
             on = track.arm and recording
             for arm in arms:
                 want = arm.max if on else arm.min
+                self._set_by_us[id(arm)] = want
                 if arm.value != want and arm.is_enabled:
                     arm.value = want
 
