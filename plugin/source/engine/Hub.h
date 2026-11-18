@@ -39,6 +39,7 @@ struct MemberControls
 {
     std::atomic<float>* slot = nullptr;       // 1 to 9, which grid cell this instance owns
     std::atomic<float>* recordArm = nullptr;
+    std::atomic<float>* trackArmed = nullptr; // Live has this track armed, as the Live script reports it; display only
     std::atomic<float>* cameras = nullptr;    // smallest grid this instance wants to see
     std::atomic<float>* master = nullptr;     // on: no slot, this instance is the one that arranges the grid
     std::function<void (int)> setSlotParameter; // message thread: show a slot (0 based) in the instance's own parameter
@@ -250,6 +251,7 @@ private:
     std::array<std::atomic<bool>, maxSlots> slotBusy;
     std::array<std::atomic<bool>, maxSlots> slotRecording;
     std::array<std::atomic<double>, maxSlots> recordStartPpq {};
+    std::atomic<uint32_t> liveArmedMask { 0 }; // slots whose track Live has armed, from the Live script; display only
     std::atomic<uint32_t> armedMask { 0 }; // slots whose track is armed, worked out with the claims // where the take in progress began, for the takes timeline
     std::array<std::atomic<bool>, maxSlots> resetRequested;
     std::array<std::atomic<uint64_t>, maxSlots> droppedFrames, droppedAudio;

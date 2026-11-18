@@ -162,7 +162,7 @@ void Hub::settleSlots()
     std::vector<Show> toShow;
     {
         const std::scoped_lock sl (memberLock);
-        uint32_t mask = 0, armed = 0;
+        uint32_t mask = 0, armed = 0, liveArmed = 0;
         int minSlot = maxSlots;
         Member* lead = nullptr;
         int cameras = 1;
@@ -251,6 +251,8 @@ void Hub::settleSlots()
                 mask |= 1u << s;
                 if (! m->isMaster && m->controls.recordArm != nullptr && m->controls.recordArm->load() > 0.5f)
                     armed |= 1u << s;
+                if (! m->isMaster && m->controls.trackArmed != nullptr && m->controls.trackArmed->load() > 0.5f)
+                    liveArmed |= 1u << s;
                 if (s < minSlot)
                 {
                     minSlot = s;
@@ -265,6 +267,7 @@ void Hub::settleSlots()
 
         claimedMask = mask;
         armedMask = armed;
+        liveArmedMask = liveArmed;
         leader = lead;
         activeSlots = juce::jlimit (1, maxSlots, cameras);
     }
@@ -1569,6 +1572,7 @@ juce::var Hub::getStatus (const Member* member) const
                 names[(size_t) s] = m->trackName;
     }
 
+    const auto sources = videoEngine.getSlotSources();
     juce::Array<juce::var> slotList;
     {
         const std::scoped_lock sl (engineLock);
@@ -1583,6 +1587,8 @@ juce::var Hub::getStatus (const Member* member) const
                 o->setProperty ("recordStartPpq", recordStartPpq[(size_t) s].load());
                 o->setProperty ("trackName", names[(size_t) s]);
                 o->setProperty ("armed", ((armedMask.load() >> s) & 1u) != 0);
+                o->setProperty ("liveArmed", ((liveArmedMask.load() >> s) & 1u) != 0);
+                o->setProperty ("camera", sources[(size_t) s].isNotEmpty());
                 o->setProperty ("review", engine->slotHasReview (s));
                 o->setProperty ("status", shown != nullptr ? statusName (shown->status) : "noTake");
                 o->setProperty ("source", shown != nullptr ? kindName (shown->kind) : "none");

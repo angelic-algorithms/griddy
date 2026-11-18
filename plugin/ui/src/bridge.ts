@@ -74,6 +74,10 @@ export type SlotInfo = {
   recordStartPpq?: number;
   trackName?: string;
   armed?: boolean;
+  /** Live has this track armed (from the Live script), whether or not Live records. */
+  liveArmed?: boolean;
+  /** A camera is picked for this slot; false once the camera is turned off. */
+  camera?: boolean;
   review?: boolean;
   /** No clip plays here: the picture is black. */
   gap?: boolean;

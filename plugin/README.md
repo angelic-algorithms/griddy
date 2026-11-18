@@ -55,7 +55,7 @@ Put pieces of several takes together in Live's take lanes and each piece shows i
 
 ## Link Griddy's arm to Live (control surface script)
 
-Live does not tell a plugin whether its track is armed or whether Live records, so on its own Griddy records whenever its own arm is on and Live plays. The script in `live/Griddy` links them: a track's Griddy is armed only while that track is armed in Live and Live records (Arrangement or Session), and Griddy's own arm button follows Live's. When a track with Griddy on it is armed with Monitor Off, the script sets Monitor to Auto, so Griddy hears what it records; it changes Monitor in no other case.
+Live does not tell a plugin whether its track is armed or whether Live records, so on its own Griddy records whenever its own arm is on and Live plays. The script in `live/Griddy` links them: a track's Griddy is armed only while that track is armed in Live and Live records (Arrangement or Session), and Griddy's own arm button follows Live's. When a track with Griddy on it is armed with Monitor Off, the script sets Monitor to Auto, so Griddy hears what it records; it changes Monitor in no other case. Pressing Griddy's REC arms that track in Live, switches Live's record button on and starts playback; pressing it again while Live records switches Live's record button off. The script also copies Live's arm to Griddy's "Track armed in Live" parameter, so an armed track's tile shows its camera before Live records; that parameter changes nothing else.
 
 Install it once, with Live closed:
 

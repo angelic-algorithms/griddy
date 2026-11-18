@@ -15,6 +15,7 @@ namespace ParamIDs
     inline constexpr auto numSlots   = "numSlots";
     inline constexpr auto recordArm  = "recordArm";
     inline constexpr auto recordMode = "recordMode";
+    inline constexpr auto trackArmed = "trackArmed";
 }
 
 /** The plugin as the DAW sees it.

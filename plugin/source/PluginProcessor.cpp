@@ -22,6 +22,10 @@ juce::AudioProcessorValueTreeState::ParameterLayout GriddyProcessor::createParam
     // automation still load. Its value is ignored.
     layout.add (std::make_unique<AudioParameterChoice> (ParameterID { ParamIDs::recordMode, 1 }, "Record when (not used)",
                                                         StringArray { "DAW records", "DAW plays", "Armed" }, 1));
+
+    // Set by the Live script (live/Griddy) to Live's own arm for this track, so the tile shows the camera on an armed track
+    // before Live records. It never starts a recording.
+    layout.add (std::make_unique<AudioParameterBool> (ParameterID { ParamIDs::trackArmed, 1 }, "Track armed in Live", false));
     return layout;
 }
 
@@ -36,6 +40,7 @@ GriddyProcessor::GriddyProcessor()
     controls.cameras    = parameters.getRawParameterValue (ParamIDs::numSlots);
     controls.master     = parameters.getRawParameterValue (ParamIDs::master);
     controls.recordArm  = parameters.getRawParameterValue (ParamIDs::recordArm);
+    controls.trackArmed = parameters.getRawParameterValue (ParamIDs::trackArmed);
 
     // The hub may need to move this instance to a free slot; the parameter is shown on the message thread.
     controls.setSlotParameter = [this] (int slot)

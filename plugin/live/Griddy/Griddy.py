@@ -9,10 +9,14 @@
 # One more thing it does: when a track with Griddy on it is armed and its Monitor is Off, it sets Monitor to Auto.
 # With Monitor Off, Live sends the track's devices silence while recording, so Griddy would record no sound.
 # It changes Monitor in no other case.
+#
+# It also copies Live's arm to Griddy's "Track armed in Live" parameter, so Griddy shows the camera on an armed track
+# before Live records. That parameter only changes what Griddy shows.
 
 from _Framework.ControlSurface import ControlSurface
 
 ARM_PARAMETER = "Record arm"
+TRACK_ARMED_PARAMETER = "Track armed in Live"
 GRIDDY_PARAMETERS = ("Record arm", "Cameras")  # a plugin with both is Griddy, whatever the device is called
 MONITOR_AUTO = 1
 MONITOR_OFF = 2
@@ -25,6 +29,16 @@ def griddy_arm(device):
     names = dict((p.name, p) for p in device.parameters)
     if all(n in names for n in GRIDDY_PARAMETERS):
         return names[ARM_PARAMETER]
+    return None
+
+
+def griddy_track_armed(device):
+    """Griddy's Track armed in Live parameter on this device, or None (not Griddy, or a Griddy built before it)."""
+    if griddy_arm(device) is None:
+        return None
+    for p in device.parameters:
+        if p.name == TRACK_ARMED_PARAMETER:
+            return p
     return None
 
 
@@ -137,6 +151,12 @@ class Griddy(ControlSurface):
             if track.arm and track.current_monitoring_state == MONITOR_OFF:
                 track.current_monitoring_state = MONITOR_AUTO
                 self.log_message("Griddy: %s Monitor set from Off to Auto, so Griddy hears what it records" % track.name)
+
+            for shown in (griddy_track_armed(d) for d in track.devices):
+                if shown is not None:
+                    want = shown.max if track.arm else shown.min
+                    if shown.value != want and shown.is_enabled:
+                        shown.value = want
 
             on = track.arm and recording
             for arm in arms:

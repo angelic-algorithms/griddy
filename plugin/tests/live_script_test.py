@@ -129,11 +129,12 @@ import Griddy as script  # noqa: E402
 
 link = sys.modules["Griddy.Griddy"]  # the module; the package name Griddy also names the class
 
-griddy = lambda: Device("Griddy", "PluginDevice", ["Slot", "Cameras", "Record arm", "Master"])
+griddy = lambda: Device("Griddy", "PluginDevice", ["Slot", "Cameras", "Record arm", "Master", "Track armed in Live"])
 vocals = Track("Vocals", [griddy()], monitor=2)
 guitar = Track("Guitar", [Device("EQ Eight", "Eq8Device", ["Gain"])], monitor=2)
 song = Song([vocals, guitar])
 arm = vocals.devices[0].parameters[2]
+shown = vocals.devices[0].parameters[4]
 
 surface = script.create_instance(song)
 run_scheduled()
@@ -143,6 +144,7 @@ check(vocals.current_monitoring_state == 2, "Monitor is left alone while the tra
 vocals.set("arm", True)
 run_scheduled()
 check(arm.value == 0.0, "track armed but Live not recording: Griddy is not armed")
+check(shown.value == 1.0, "track armed: Griddy's Track armed in Live is on, so it shows the camera")
 check(vocals.current_monitoring_state == 1, "arming a Griddy track with Monitor Off sets it to Auto")
 check(guitar.current_monitoring_state == 2, "a track without Griddy keeps Monitor Off")
 
@@ -174,6 +176,7 @@ check(arm.value == 1.0, "session recording counts as Live recording")
 vocals.set("arm", False)
 run_scheduled()
 check(arm.value == 0.0, "disarming the track in Live disarms Griddy")
+check(shown.value == 0.0, "and switches its Track armed in Live off")
 
 vocals.current_monitoring_state = 0
 vocals.set("arm", True)

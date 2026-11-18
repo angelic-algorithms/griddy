@@ -20,7 +20,7 @@ export type SlotView = {
   kept?: TakeInfo;
   /** The take the picture shows: the one in review, else the kept one. */
   shown?: TakeInfo;
-  /** The picture is the live camera: recording, or armed with no take waiting in review. */
+  /** The picture is the live camera: a camera is on and the slot records, or its track is armed with no take in review. */
   live: boolean;
   empty: boolean;
   info?: SlotInfo;
@@ -43,7 +43,9 @@ export function slotViews(engine: EngineStatus | undefined, transport: Transport
     const kept = takes.find((t) => t.state === "kept");
     const recording = !!info?.recording;
     const armed = slot === own ? engine.armed : !!info?.armed;
-    const live = recording || (armed && !review);
+    // Griddy's own arm is on only while Live records, so Live's arm also counts for showing the camera.
+    const camera = info?.camera !== false;
+    const live = camera && (recording || ((armed || !!info?.liveArmed) && !review));
     const waiting = armed && !recording && transport.ppq < 0;
     const claimed = slot === own || !!info?.claimed;
     const playing = transport.playing && !live && (review || kept) && info
