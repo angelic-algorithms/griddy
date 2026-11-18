@@ -99,6 +99,19 @@ struct Member
     // Control thread -> audio thread: the host sample the take being started begins at, or -1 for "now".
     std::atomic<int64_t> takeFrom { -1 };
 
+    // Film: a video for a recording already in Live. The message thread says what to film (under the hub's memberLock);
+    // the control thread follows the script's word that Live plays it; the audio thread films while Live is inside it.
+    std::atomic<bool> filmArmed { false };
+    std::atomic<bool> filmLive { false };
+    std::atomic<double> filmFrom { 0.0 }, filmTo { 0.0 }; // host seconds Live plays for filming
+    juce::String filmPath;     // the recorded file filmed for
+    juce::String filmName;     // how the UI names it
+    double filmBorn = 0.0;     // its creation time
+    double filmOrigin = 0.0;   // host seconds where its first sample sits, in the clip filmed against
+    double filmAsked = 0.0;    // steadyNowSeconds() of the press
+    bool filmSeen = false;     // control thread: the script has said Live plays it
+    bool filmTake = false;     // control thread: the take being recorded is a film take
+
     // Control thread only.
     bool recording = false;
     double wantSince = -1.0;   // steadyNowSeconds() when this take was first wanted, while its start waits on Live
@@ -176,7 +189,12 @@ public:
     bool setSlip (int slot, int takeId, double seconds);
     /** A press of REC or Arm on this instance, for the Live script: "record", "stop", "arm" or "disarm".
         False when the script does not run, or the instance has no slot. */
-    bool requestInLive (Member* member, const juce::String& action);
+    bool requestInLive (Member* member, const juce::String& action, double from = 0.0, double to = 0.0);
+
+    /** Film: ask Live to play a recording of this member's track, and film while it does. file is the file's number
+        in the arrangement file, or -1 for the clip clicked in Live. Returns why not, or an empty string. */
+    juce::String requestFilm (Member* member, int file);
+    bool stopFilm (Member* member);
     /** The Live script is running: its arrangement file was rewritten in the last few seconds. */
     bool liveScriptRunning() const noexcept { return liveScript.load(); }
     /** The host's name for an instance's track. Message thread. */
@@ -272,6 +290,7 @@ private:
     std::array<std::atomic<bool>, maxSlots> slotBusy;
     std::array<std::atomic<bool>, maxSlots> slotRecording;
     std::array<std::atomic<double>, maxSlots> recordStartPpq {};
+    std::atomic<uint32_t> filmingMask { 0 };   // slots recording a film take
     std::atomic<uint32_t> liveArmedMask { 0 }; // slots whose track Live has armed, from the Live script; display only
     std::atomic<uint32_t> fileArmedMask { 0 }; // slots whose track Live has armed, from the arrangement file (any set)
     std::atomic<uint32_t> loggedLiveArmed { 0 }; // hub thread: the Live arm last logged
@@ -307,7 +326,9 @@ private:
     // Live's arrangement from the Live script; hub thread only.
     LiveTimeline liveTimeline;
     juce::Time timelineModified;
-    std::array<std::shared_ptr<const SlotTimeline>, maxSlots> timelines;
+    std::array<std::shared_ptr<const SlotTimeline>, maxSlots> timelines; // written by the control thread under timelineLock
+    mutable std::mutex timelineLock;
+    juce::var filmToVar (const Member* member) const;
     const PlaybackEngine* timelineEngine = nullptr;
 
     // Hub thread only: where each slot's recording began in Live (beats), from the arrangement file.

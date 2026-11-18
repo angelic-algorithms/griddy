@@ -412,12 +412,17 @@ press("film", **{"from": 6.0, "to": 7.0})
 check(not song.record_mode and not vocals.arm, "Film switches Live's record off and disarms the track, so nothing records")
 check(song.is_playing and song.current_song_time == 8.0, "and plays from a bar before the clip (beat 12 less 4)")
 check(arm.value == 0.0, "Griddy's Record arm stays off while filming")
+data, tracks = written_tracks()
+check(tracks["Vocals"].get("film") == {"from": 4.0, "to": 7.0}, "the arrangement file says Live plays the clip for filming, in seconds")
+check("film" not in tracks["Keys"], "and only for the track filmed for")
 song.current_song_time = 13.0
 surface.update_display()
 check(song.is_playing, "Live plays on inside the clip")
 song.current_song_time = 14.0
 surface.update_display()
 check(not song.is_playing, "and stops at the clip's end")
+data, tracks = written_tracks()
+check("film" not in tracks["Vocals"], "once stopped, the file no longer says Live plays for filming")
 song.current_song_time = 0.0
 surface.update_display()
 check(not song.is_playing, "filming has ended: the script does not play again")

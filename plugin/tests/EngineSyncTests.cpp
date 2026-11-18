@@ -589,6 +589,82 @@ struct LiveTimelineTests : juce::UnitTest
             expectEquals ((int) takeOf (b, 0), 1);
         }
 
+        beginTest ("a film take is its file's video by path, over the take recorded with it");
+        {
+            SlotTimeline tl;
+            tl.files = { "/Live/a.wav", "/Live/b.wav" };
+            tl.clips = { clip (0, 4.0, 6.0, 4.0, 1000.0), clip (1, 6.0, 8.0, 3.0, 1060.0) };
+            auto film = take (7, 40.0, 2000.0);
+            film.filmPath = "/Live/a.wav";
+            film.filmLead = 1.5;
+            film.filmCurrent = true;
+            const auto b = SyncController::bindFiles (tl, { take (1, 4.1, 1000.2), take (2, 3.05, 1060.2), film });
+            expectEquals ((int) takeOf (b, 0), 7);
+            expectEquals ((int) takeOf (b, 1), 2);
+            for (const auto& x : b)
+                if (x.file == 0)
+                {
+                    expect (x.film && x.leadKnown);
+                    expectWithinAbsoluteError (x.lead, 1.5, 1.0e-9);
+                    expectEquals ((int) x.underTakeId, 1);
+                    expectWithinAbsoluteError (x.underLead, 0.1, 1.0e-9);
+                }
+        }
+
+        beginTest ("of several film takes of a file, the kept one wins, else the newest");
+        {
+            SlotTimeline tl;
+            tl.files = { "/Live/a.wav" };
+            tl.clips = { clip (0, 4.0, 6.0, 4.0) };
+            auto older = take (7, 40.0, 2000.0), newer = take (8, 50.0, 3000.0);
+            older.filmPath = newer.filmPath = "/Live/a.wav";
+            expectEquals ((int) takeOf (SyncController::bindFiles (tl, { older, newer }), 0), 8);
+            older.filmCurrent = true;
+            expectEquals ((int) takeOf (SyncController::bindFiles (tl, { older, newer }), 0), 7);
+        }
+
+        beginTest ("a film take follows its file to a new path by name and creation time, and binds nothing else");
+        {
+            SlotTimeline tl;
+            tl.files = { "/Collected/Samples/Recorded/a.wav", "/Live/c.wav" };
+            tl.clips = { clip (0, 4.0, 6.0, 4.0, 1000.0), clip (1, 40.0, 44.0, 40.0, 1000.3) };
+            auto film = take (7, 40.0, 2000.0);
+            film.filmPath = "/Live/a.wav";
+            film.filmBorn = 1000.0;
+            const auto b = SyncController::bindFiles (tl, { film });
+            expectEquals ((int) takeOf (b, 0), 7);
+            expectEquals ((int) takeOf (b, 1), -1); // it started where c's clip is, but a film take never binds by time
+            film.filmBorn = 900.0;
+            expect (SyncController::bindFiles (tl, { film }).empty());
+        }
+
+        beginTest ("film fields: the script's file and take.json");
+        {
+            LiveTimeline t;
+            expect (parseLiveTimeline (R"({"version":1,"written":1.0,"tracks":[{"name":"Hats","slot":"3","files":["/x/a.wav","/x/b.wav"],
+                "film":{"from":2.0,"to":9.5},"clips":[{"start":1.0,"end":3.0,"file":1,"origin":0.5,"selected":true,"bar":2}]}]})", t));
+            expect (t.tracks[0].timeline.files == std::vector<std::string> { "/x/a.wav", "/x/b.wav" });
+            expect (t.tracks[0].filmKnown && t.tracks[0].filmFrom == 2.0 && t.tracks[0].filmTo == 9.5);
+            expect (t.tracks[0].timeline.clips[0].selected && t.tracks[0].timeline.clips[0].bar == 2);
+
+            TakeMeta m;
+            m.filmPath = "/x/b.wav";
+            m.filmBorn = 123.0;
+            m.filmLead = -1.25;
+            const auto back = TakeMeta::fromVar (juce::JSON::parse (juce::JSON::toString (m.toVar())));
+            expect (back.isFilm() && back.filmPath == m.filmPath && back.filmBorn == 123.0 && back.filmLead == -1.25);
+            expect (! TakeMeta::fromVar (juce::JSON::parse (juce::JSON::toString (TakeMeta().toVar()))).isFilm());
+
+            LiveRequest r;
+            r.action = "film";
+            r.from = 3.0;
+            r.to = 7.5;
+            const auto v = juce::JSON::parse (liveRequestsJson ({ r }));
+            const auto& x = v.getProperty ("requests", {}).getArray()->getReference (0);
+            expectEquals ((double) x.getProperty ("from", 0.0), 3.0);
+            expectEquals ((double) x.getProperty ("to", 0.0), 7.5);
+        }
+
         beginTest ("the script's file parses");
         {
             LiveTimeline t;

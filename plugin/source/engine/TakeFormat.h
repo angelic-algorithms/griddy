@@ -61,6 +61,13 @@ struct TakeMeta
     /** The name of the track whose audio the take listened to, when the host told us. */
     juce::String trackName;
 
+    /** A film take: filmed while Live played a recording that was already there ("filmedFor" in take.json). It is the
+        video of that file, found by its path (else its name and creation time), wherever the file's clips play. */
+    juce::String filmPath;     // empty for a take recorded with its sound
+    double filmBorn = 0.0;     // the file's creation time, seconds since the epoch
+    double filmLead = 0.0;     // seconds into the file where this take's audio starts
+    bool isFilm() const noexcept { return filmPath.isNotEmpty(); }
+
     /** hostPieces, or the single piece an older take implies. */
     std::vector<HostPiece> pieces() const
     {

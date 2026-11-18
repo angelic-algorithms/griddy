@@ -73,6 +73,15 @@ juce::var TakeMeta::toVar() const
     if (trackName.isNotEmpty())
         o->setProperty ("trackName", trackName);
 
+    if (isFilm())
+    {
+        auto* f = new juce::DynamicObject();
+        f->setProperty ("path", filmPath);
+        f->setProperty ("born", filmBorn);
+        f->setProperty ("lead", filmLead);
+        o->setProperty ("filmedFor", juce::var (f));
+    }
+
     return juce::var (o);
 }
 
@@ -117,6 +126,14 @@ TakeMeta TakeMeta::fromVar (const juce::var& v)
                 m.hostPieces.push_back ({ (double) x[0], (double) x[1] });
 
     m.trackName = v.getProperty ("trackName", {}).toString();
+
+    if (const auto f = v.getProperty ("filmedFor", {}); f.isObject())
+    {
+        m.filmPath = f.getProperty ("path", {}).toString();
+        m.filmBorn = (double) f.getProperty ("born", 0.0);
+        m.filmLead = (double) f.getProperty ("lead", 0.0);
+    }
+
     return m;
 }
 

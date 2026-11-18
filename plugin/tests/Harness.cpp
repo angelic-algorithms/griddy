@@ -153,7 +153,8 @@ struct Recorded
     int32_t id() const { return entry.meta.takeId; }
 };
 
-Recorded recordTake (PlaybackEngine& eng, int slot, double seconds, const std::vector<float>& performance, double hostStartSeconds, bool embed = false, bool wantMov = false, double loopSeconds = 0.0)
+Recorded recordTake (PlaybackEngine& eng, int slot, double seconds, const std::vector<float>& performance, double hostStartSeconds, bool embed = false, bool wantMov = false, double loopSeconds = 0.0,
+                     const juce::String& filmPath = {}, double filmLead = 0.0)
 {
     TakeRecorder rec (eng.history());
     TakeRecorder::Config cfg;
@@ -171,6 +172,8 @@ Recorded recordTake (PlaybackEngine& eng, int slot, double seconds, const std::v
     meta.startHostSample = (int64_t) (hostStartSeconds * SR);
     meta.startPpq = hostStartSeconds * 2.0;
     meta.bpm = 120.0;
+    meta.filmPath = filmPath;  // a film take: filmed while the DAW played that file, filmLead seconds into it
+    meta.filmLead = filmLead;
     rec.start (slot, meta, cfg);
 
     SyntheticCamera cam (cfg.width, cfg.height, [&] { return rec.currentTakeId() & 0xff; },
@@ -1774,6 +1777,105 @@ void compTimeline()
     }
 }
 
+// Film: a drum take A recorded with its sound and video at 10 s, later filmed again from 2 to 6 s into its file (the
+// film take F, filmed while the DAW played A's clip at 12 s), then A's clip moved to 30 s with its first take left on a
+// take lane. Every clip of the file shows F where F covers it and A elsewhere, also once A is kept again (which archives
+// F); with F retaken, A everywhere; and for a file no Griddy take was recorded with, F where it covers and black elsewhere.
+void filmTimeline()
+{
+    struct Case { const char* what; bool withA; bool archived; };
+    for (const auto& c : { Case { "film over a take: ", true, false }, Case { "film retaken: ", true, true },
+                           Case { "film of a file with no take: ", false, false } })
+    {
+        const juce::String what = c.what;
+        auto w = makeWorld (1);
+        const auto drums = voiceLike (231, 8.5);
+        Recorded fileOnly; // a recording Griddy never saw: the DAW's file and no take
+        fileOnly.audio = drums;
+        auto& A = c.withA ? w->add (recordTake (*w->engine, 0, 8.0, drums, 10.0)) : fileOnly;
+        const std::vector<float> heard (drums.begin() + (long) (2.0 * SR), drums.begin() + (long) (6.5 * SR));
+        auto& F = w->add (recordTake (*w->engine, 0, 4.0, heard, 12.0, false, false, 0.0, "/Live/Drums/Hats.wav", 2.0));
+        if (c.withA)
+            w->engine->history().keep (0, A.id());
+        if (c.archived)
+            w->engine->history().retake (0, F.id());
+        else
+            w->engine->history().keep (0, F.id()); // archives A, which still shows where its clips play
+        if (c.withA && ! c.archived)
+            w->engine->history().keep (0, A.id()); // and keeping A again archives F, which must still show
+        w->engine->reloadSlot (0);
+
+        Timeline tl (1);
+        tl.clips[0].push_back (Clip::place (A, 30.0, 0.0, 8.0)); // the file's sound, wherever it is moved
+
+        auto t = std::make_shared<SlotTimeline>();
+        t->files = { "/Live/Drums/Hats.wav" };
+        TimelineClip moved;
+        moved.hostStart = 30.0;
+        moved.hostEnd = 38.0;
+        moved.file = 0;
+        moved.originKnown = true;
+        moved.origin = 30.0;
+        auto lane = moved;
+        lane.hostStart = 10.0;
+        lane.hostEnd = 18.0;
+        lane.origin = 10.0;
+        lane.lane = true;
+        t->clips = { moved, lane };
+        w->engine->setTimeline (0, t);
+
+        const auto s = observe (*w, tl, { { Event::seek, 0.0, 29.5 }, { Event::play, 0.0 } }, 29.5, 9.0, 0);
+
+        int inFilm = 0, filmOk = 0, outside = 0, outsideOk = 0;
+        std::vector<double> filmErr;
+        for (const auto& x : s)
+        {
+            if (! x.playing || x.host < 30.1 || x.host > 37.9)
+                continue;
+            const auto filePos = x.host - 30.0;
+            const auto filmed = filePos > 2.1 && filePos < 5.9;
+            if (! filmed && (filePos > 1.9 && filePos < 6.1))
+                continue; // the film's edges
+
+            const auto filmShows = filmed && ! c.archived;
+            const Recorded& want = filmShows ? F : A;
+            const auto wantSeconds = filmShows ? filePos - 2.0 : filePos;
+            auto ok = false;
+            if (! filmShows && ! c.withA)
+                ok = x.black;
+            else if (x.shown && x.label == want.label())
+            {
+                const auto& m = w->labelMeta[x.label];
+                const auto err = x.counter < (int) m.frameTimes.size() ? m.frameTimes[(size_t) x.counter] + m.videoOffsetSeconds() - wantSeconds : 1.0;
+                ok = std::abs (err) < 0.04;
+                if (filmShows)
+                    filmErr.push_back (std::abs (err) * 1000.0);
+            }
+            (filmed ? inFilm : outside)++;
+            (filmed ? filmOk : outsideOk) += ok ? 1 : 0;
+        }
+
+        const auto pct = [] (int a, int n) { return juce::String (100.0 * a / std::max (1, n), 1); };
+        if (! filmErr.empty())
+        {
+            std::sort (filmErr.begin(), filmErr.end());
+            metric (what + "film picture error, median", filmErr[filmErr.size() / 2], "ms");
+            metric (what + "film picture error, worst", filmErr.back(), "ms");
+        }
+        if (c.archived)
+            check (inFilm > 0 && filmOk > 0.98 * inFilm && outsideOk > 0.98 * outside, what + "the take recorded with the file shows everywhere ("
+                   + pct (filmOk + outsideOk, inFilm + outside) + " percent)");
+        else
+        {
+            check (inFilm > 0 && filmOk > 0.98 * inFilm, what + "the film take shows where it covers the moved clip, in sync within 40 ms ("
+                   + pct (filmOk, inFilm) + " percent)");
+            check (outside > 0 && outsideOk > 0.98 * outside, what + (c.withA ? "the take recorded with the file shows elsewhere ("
+                                                                                 : "black elsewhere (") + pct (outsideOk, outside) + " percent)");
+        }
+        finish (*w);
+    }
+}
+
 // The plugin never offers test patterns: they exist for the harness, the smoke test and CI only.
 void noTestPatterns()
 {
@@ -2552,6 +2654,7 @@ int main (int argc, char** argv)
         { "comp_loop_smooth", compLoopSmooth, true },
         { "comp_monitored", compMonitored, true },
         { "comp_timeline", compTimeline, true },
+        { "film_timeline", filmTimeline, true },
         { "comp_recording_load", compRecordingLoad, true },
         { "comp_bench", compBench, true },
         { "bench", bench, true },

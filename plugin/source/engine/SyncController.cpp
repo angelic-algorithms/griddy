@@ -77,8 +77,24 @@ static double takeZero (const TakeProfile& t)
     return t.ranges.empty() ? t.hostStartSeconds : t.ranges.front().hostStart - t.ranges.front().takeAtHostStart;
 }
 
-std::vector<SyncController::FileBinding> SyncController::bindFiles (const SlotTimeline& tl, const std::vector<TakeProfile>& takes)
+static bool filmIsFile (const TakeProfile& t, const std::string& path, double born)
 {
+    if (t.filmPath == path)
+        return true;
+
+    // Collect All and Save, or a moved project folder, changes the path: the same name, created at the same moment.
+    auto name = [] (const std::string& p) { const auto at = p.find_last_of ("/\\"); return at == std::string::npos ? p : p.substr (at + 1); };
+    return born > 0.0 && t.filmBorn > 0.0 && std::abs (t.filmBorn - born) < 1.0 && name (t.filmPath) == name (path);
+}
+
+std::vector<SyncController::FileBinding> SyncController::bindFiles (const SlotTimeline& tl, const std::vector<TakeProfile>& allTakes)
+{
+    // Film takes are found by the file's path, below; by time they would fit no file, or the wrong one.
+    std::vector<TakeProfile> takes;
+    for (const auto& t : allTakes)
+        if (t.filmPath.empty())
+            takes.push_back (t);
+
     // Griddy starts its take with Live's recording or a moment later (the script arms it on the next tick), so a
     // take begins between just before and a little after its file. Clips of a file that were not moved, on the main
     // lane or a take lane, show where the file started.
@@ -93,6 +109,10 @@ std::vector<SyncController::FileBinding> SyncController::bindFiles (const SlotTi
     struct Candidate { const TakeProfile* take; double lead; bool leadKnown; };
     std::vector<std::vector<Candidate>> found (files.size());
     std::vector<double> born (files.size(), 0.0);
+    for (size_t f = 0; f < files.size(); ++f)
+        for (const auto& c : tl.clips)
+            if (c.file == files[f])
+                born[f] = std::max (born[f], c.fileBorn);
 
     for (size_t f = 0; f < files.size(); ++f)
         for (const auto& t : takes)
@@ -178,7 +198,43 @@ std::vector<SyncController::FileBinding> SyncController::bindFiles (const SlotTi
             out.push_back ({ files[f], found[f].front().take->takeId, found[f].front().lead, found[f].front().leadKnown });
     }
 
+    // A file filmed for: its film take kept or in review is its video, else its newest film take. Keeping a take of
+    // another recording on this track archives the film take, and that must not take the video off this file. The take
+    // bound by time stays under it, for where the film does not cover the file.
+    for (size_t f = 0; f < files.size(); ++f)
+    {
+        if (files[f] < 0 || (size_t) files[f] >= tl.files.size())
+            continue;
+
+        const TakeProfile* best = nullptr;
+        for (const auto& t : allTakes)
+            if (! t.filmPath.empty() && filmIsFile (t, tl.files[(size_t) files[f]], born[f])
+                && (best == nullptr || std::make_pair (t.filmCurrent, t.createdAt) > std::make_pair (best->filmCurrent, best->createdAt)))
+                best = &t;
+
+        if (best == nullptr)
+            continue;
+
+        FileBinding b { files[f], best->takeId, best->filmLead, true, true };
+        auto at = std::find_if (out.begin(), out.end(), [&] (const FileBinding& x) { return x.file == files[f]; });
+        if (at != out.end())
+        {
+            b.underTakeId = at->takeId;
+            b.underLead = at->lead;
+            b.underLeadKnown = at->leadKnown;
+            *at = b;
+        }
+        else
+            out.push_back (b);
+    }
+
     return out;
+}
+
+std::vector<SyncController::FileBinding> SyncController::currentBindings() const
+{
+    const std::scoped_lock sl (bindingsLock);
+    return publishedBindings;
 }
 
 const TakeProfile* SyncController::findTake (int32_t id, bool isTag) const
@@ -290,7 +346,11 @@ SlotTarget SyncController::update (double wallNow)
     }
 
     if (fresh || rebind)
+    {
         bindings = localTimeline != nullptr ? bindFiles (*localTimeline, localTakes) : std::vector<FileBinding> {};
+        const std::scoped_lock sl (bindingsLock);
+        publishedBindings = bindings;
+    }
 
     if (fresh)
     {
@@ -427,7 +487,7 @@ SlotTarget SyncController::update (double wallNow)
         for (const auto& c : localTimeline->clips)
             if (! c.lane && hostNow >= c.hostStart && hostNow < c.hostEnd)
                 here = &c;
-    const auto tlGap = tlOn && (here == nullptr || ! here->active || ! localTimeline->audible);
+    auto tlGap = tlOn && (here == nullptr || ! here->active || ! localTimeline->audible);
     auto timelinePlaced = false;
 
     if (tlOn && here != nullptr && here->active)
@@ -437,15 +497,32 @@ SlotTarget SyncController::update (double wallNow)
             if (x.file == here->file)
                 b = &x;
 
-        if (const auto* t = b != nullptr ? lookup (b->takeId, false) : nullptr; t != nullptr)
+        // A film take covers only what was filmed: elsewhere in the file, the take bound by time shows, or black.
+        auto shownId = b != nullptr ? b->takeId : -1;
+        auto lead = b != nullptr ? b->lead : 0.0;
+        auto leadKnown = b != nullptr && b->leadKnown;
+        if (b != nullptr && b->film && here->originKnown)
+        {
+            const auto* film = lookup (b->takeId, false);
+            const auto at = hostNow - here->origin - b->lead;
+            if (film == nullptr || at < 0.0 || at > film->durationSeconds)
+            {
+                shownId = b->underTakeId;
+                lead = b->underLead;
+                leadKnown = b->underLeadKnown;
+                tlGap = tlGap || shownId < 0;
+            }
+        }
+
+        if (const auto* t = shownId >= 0 ? lookup (shownId, false) : nullptr; t != nullptr)
         {
             const auto home = t->ranges.empty() ? -t->hostStartSeconds
                                                 : t->ranges.front().takeAtHostStart - t->ranges.front().hostStart;
             auto offset = home;
             auto exact = false;
-            if (here->originKnown && b->leadKnown)
+            if (here->originKnown && leadKnown)
             {
-                offset = -(here->origin + b->lead);
+                offset = -(here->origin + lead);
                 exact = true;
             }
 

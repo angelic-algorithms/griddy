@@ -116,6 +116,15 @@ juce::WebBrowserComponent::Options GriddyEditor::makeBrowserOptions()
         {
             complete (args.size() > 0 && hub.requestInLive (processor.getMember(), args[0].toString()));
         })
+        .withNativeFunction ("requestFilm", [this] (const juce::Array<juce::var>& args, auto complete)
+        {
+            complete (hub.requestFilm (processor.getMember(), args.size() > 0 ? (int) args[0] : -1));
+        })
+        .withNativeFunction ("stopFilm", [this] (const juce::Array<juce::var>& args, auto complete)
+        {
+            juce::ignoreUnused (args);
+            complete (hub.stopFilm (processor.getMember()));
+        })
         .withNativeFunction ("keepTake", [this] (const juce::Array<juce::var>& args, auto complete)
         {
             complete (args.size() > 1 && hub.keepTake ((int) args[0], (int) args[1]));

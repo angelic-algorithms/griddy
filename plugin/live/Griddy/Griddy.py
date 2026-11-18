@@ -129,6 +129,8 @@ class Griddy(ControlSurface):
         self._last_arm = {}       # track name -> arm last seen, to log changes made in Live
         self._film_until = None   # while Griddy films: the beat where Live stops, the end of the clip filmed
         self._film_started = False
+        self._film_track = None   # the track filmed for, and the beat Live plays it from
+        self._film_from = 0.0
         with self.component_guard():
             song = self.song()
             # Kept for the script's whole life. (They used to be dropped at every rebuild: Live hands out a new song
@@ -365,6 +367,8 @@ class Griddy(ControlSurface):
             song.continue_playing()  # from the playhead just set; start_playing would go from the start marker
         self._film_until = end
         self._film_started = False
+        self._film_track = track.name
+        self._film_from = song.current_song_time
         self.log_message("Griddy: Film on %s, so Live plays beats %.3f to %.3f" % (track.name, song.current_song_time, end))
 
     def _check_film(self):
@@ -460,6 +464,9 @@ class Griddy(ControlSurface):
             "clips": clips,
             "files": [p for p, _ in sorted(files.items(), key=lambda kv: kv[1])],  # each file number's path
         }
+        if self._film_until is not None and track.name == self._film_track:
+            # Live plays this track's clip for Griddy to film, between these host seconds.
+            entry["film"] = {"from": self._film_from * seconds_per_beat, "to": self._film_until * seconds_per_beat}
         if track.arm and song.record_mode and self._record_from is not None:
             # Where this track's recording begins, so Griddy's take starts there too, not when Griddy hears of it.
             entry["recordFrom"] = max(self._record_from, self._armed_from.get(track.name, self._record_from))

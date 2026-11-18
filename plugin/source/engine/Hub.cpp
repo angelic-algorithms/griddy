@@ -638,8 +638,14 @@ void Hub::processBlock (Member& member, const juce::AudioBuffer<float>& buffer, 
 
     // The one rule: armed and playing records one take. Live sends no record flag, so its record button cannot be the gate.
     // With the Live script, the arm is Live's own "armed and recording", so it ends the take itself and may record again.
-    const auto want = slot >= 0 && armed && t.isPlaying
-                   && (liveScript.load (std::memory_order_relaxed) || ! member.takeDone.load (std::memory_order_relaxed));
+    // Film: while Live plays the recording asked for (the script says from where to where), with no arm in Live.
+    const auto hostSeconds = (double) t.timeInSamples / juce::jmax (1.0, sampleRate);
+    const auto filming = member.filmArmed.load (std::memory_order_relaxed) && member.filmLive.load (std::memory_order_relaxed)
+                      && t.isPlaying && hostSeconds >= member.filmFrom.load (std::memory_order_relaxed) - 0.05
+                      && hostSeconds < member.filmTo.load (std::memory_order_relaxed) + 0.1;
+    const auto want = slot >= 0 && t.isPlaying
+                   && ((armed && (liveScript.load (std::memory_order_relaxed) || ! member.takeDone.load (std::memory_order_relaxed)))
+                       || filming);
 
     if (want && ! member.wantRecording.load (std::memory_order_relaxed))
     {
@@ -1002,6 +1008,35 @@ void Hub::controlTick()
             else if (! m.recording)
                 recent.clear();
 
+            // Film: follow the script's word that Live plays the clip. Give up when Live records instead, stops before
+            // filming began, or never plays it.
+            if (m.filmArmed.load())
+            {
+                const auto* tr = slotTracks[(size_t) slot];
+                const auto live = tr != nullptr && tr->filmKnown;
+                if (live)
+                {
+                    m.filmFrom = tr->filmFrom;
+                    m.filmTo = tr->filmTo;
+                    m.filmSeen = true;
+                }
+                m.filmLive = live;
+
+                juce::String why;
+                if (liveTimeline.recording)
+                    why = "Live records";
+                else if (m.filmSeen && ! live && ! m.recording)
+                    why = "Live stopped before filming began";
+                else if (! m.filmSeen && steadyNowSeconds() - m.filmAsked > 3.0)
+                    why = "Live did not play the clip";
+                if (why.isNotEmpty())
+                {
+                    m.filmArmed = false;
+                    m.filmLive = false;
+                    log ("slot " + juce::String (slot + 1) + ": filming ends: " + why);
+                }
+            }
+
             if (! want)
                 m.wantSince = -1.0;
 
@@ -1012,7 +1047,8 @@ void Hub::controlTick()
                 const auto bpm = juce::jmax (1.0, m.requestBpm.load());
                 const auto samplesPerBeat = sampleRate * 60.0 / bpm;
 
-                if (script)
+                const auto film = m.filmArmed.load() && m.filmLive.load();
+                if (script && ! film)
                 {
                     // Start where Live's recording of this track began: earlier, from the history, when Griddy heard
                     // late; later, when Live counts in or punches in. Wait a moment for the file to say where.
@@ -1051,6 +1087,12 @@ void Hub::controlTick()
                 meta.timeSigNumerator = m.requestNum.load();
                 meta.timeSigDenominator = m.requestDen.load();
                 meta.trackName = m.trackName; // the track this take listens to; it follows edits on that track
+                if (film)
+                {
+                    meta.filmPath = m.filmPath;
+                    meta.filmBorn = m.filmBorn;
+                    meta.filmLead = (double) from / sampleRate - m.filmOrigin;
+                }
 
                 TakeRecorder::Config cfg;
                 cfg.embedSync = false;
@@ -1061,8 +1103,10 @@ void Hub::controlTick()
                     const auto back = (double) (m.hostSample.load() - from) / sampleRate;
                     log ("slot " + juce::String (slot + 1) + ": take " + juce::String (r->currentTakeId()) + " starts at sample "
                          + juce::String (meta.startHostSample)
-                         + (script ? juce::String::formatted (", where Live's recording began, %.3f s before now", back) : juce::String()));
+                         + (film ? juce::String::formatted (", filming for %s from %.3f s into it", m.filmName.toRawUTF8(), meta.filmLead)
+                            : script ? juce::String::formatted (", where Live's recording began, %.3f s before now", back) : juce::String()));
                     m.recording = true;
+                    m.filmTake = film;
                     m.lastCameraSerial = 0;
 
                     // The frames since Live's recording began, from the history; then the live ones as usual.
@@ -1076,12 +1120,20 @@ void Hub::controlTick()
                     recent.clear();
                     recordStartPpq[(size_t) slot] = meta.startPpq;
                     slotRecording[(size_t) slot] = true;
+                    if (film)
+                        filmingMask |= 1u << slot;
                 }
             }
             else if (! want && m.recording && ! slotBusy[(size_t) slot].load())
             {
                 m.recording = false;
                 slotBusy[(size_t) slot] = true;
+                if (std::exchange (m.filmTake, false))
+                {
+                    m.filmArmed = false; // one film take per press
+                    m.filmLive = false;
+                    log ("slot " + juce::String (slot + 1) + ": filming ends");
+                }
 
                 // Every play while armed would record, so the take ends the arm. With the Live script the arm is Live's,
                 // and writing it here as well made the two fight over it, starting and ending a take every tenth of a second.
@@ -1244,6 +1296,7 @@ void Hub::finishTake (int slot)
     if (e == nullptr || r == nullptr)
     {
         slotRecording[(size_t) slot] = false;
+        filmingMask &= ~(1u << slot);
         return;
     }
 
@@ -1263,6 +1316,7 @@ void Hub::finishTake (int slot)
         droppedFrames[(size_t) slot] += r->framesDropped();
         droppedAudio[(size_t) slot] += r->audioDropped();
         slotRecording[(size_t) slot] = false;
+        filmingMask &= ~(1u << slot);
         e->reloadSlot (slot);
         log ("slot " + juce::String (slot + 1) + ": take " + juce::String (entry->meta.takeId) + " playable "
              + juce::String ((juce::Time::getMillisecondCounterHiRes() - t0) / 1000.0, 2) + " s after the stop was handled (finishing "
@@ -1272,6 +1326,7 @@ void Hub::finishTake (int slot)
     else
     {
         slotRecording[(size_t) slot] = false;
+        filmingMask &= ~(1u << slot);
         const std::scoped_lock sl (statusLock);
         lastError = "A take could not be finished.";
     }
@@ -1627,12 +1682,14 @@ void Hub::updateTimeline (PlaybackEngine& e)
         {
             if (had != nullptr)
                 log ("slot " + juce::String (s + 1) + ": Live's arrangement no longer reported; following the sound only");
+            const std::scoped_lock tl (timelineLock);
             had = nullptr;
         }
         else
         {
             if (had == nullptr)
                 log ("slot " + juce::String (s + 1) + ": following Live's arrangement (" + juce::String ((int) track->timeline.clips.size()) + " clips)");
+            const std::scoped_lock tl (timelineLock);
             had = std::make_shared<const SlotTimeline> (track->timeline);
         }
         e.setTimeline (s, had);
@@ -1701,7 +1758,7 @@ void Hub::setTrackName (Member* member, const juce::String& name)
             m->trackName = name;
 }
 
-bool Hub::requestInLive (Member* member, const juce::String& action)
+bool Hub::requestInLive (Member* member, const juce::String& action, double from, double to)
 {
     if (! liveScript.load() || member == nullptr || member->isMaster.load())
         return false;
@@ -1719,6 +1776,8 @@ bool Hub::requestInLive (Member* member, const juce::String& action)
     r.id = juce::jmax (lastRequestId + 1, (int64_t) juce::Time::currentTimeMillis());
     lastRequestId = r.id;
     r.action = action;
+    r.from = from;
+    r.to = to;
     r.at = (double) juce::Time::currentTimeMillis() / 1000.0;
 
     liveRequests.push_back (r);
@@ -1734,6 +1793,164 @@ bool Hub::requestInLive (Member* member, const juce::String& action)
 
     log ("slot " + juce::String (r.slot + 1) + ": asks Live to " + action);
     return true;
+}
+
+static juce::String fileTitle (const std::string& path)
+{
+    return juce::String (path).fromLastOccurrenceOf ("/", false, false).upToLastOccurrenceOf (".", false, false);
+}
+
+/** The clip to film for: the one clicked in Live, or a clip of the given file, on the main lane if it has one. */
+static const TimelineClip* filmClip (const SlotTimeline& tl, int file)
+{
+    const TimelineClip* found = nullptr;
+    for (const auto& c : tl.clips)
+    {
+        if (file < 0 ? c.selected : c.file == file)
+        {
+            if (found == nullptr || (found->lane && ! c.lane) || (! found->originKnown && c.originKnown && found->lane == c.lane))
+                found = &c;
+        }
+    }
+    return found;
+}
+
+juce::String Hub::requestFilm (Member* member, int file)
+{
+    if (member == nullptr || member->isMaster.load())
+        return "Film is on a track's Griddy, not the master.";
+    if (! liveScript.load())
+        return "Film needs the Griddy control surface in Live.";
+
+    const auto slot = member->slot.load();
+    if (! juce::isPositiveAndBelow (slot, maxSlots))
+        return "This Griddy has no slot yet.";
+    if (videoEngine.getSlotSources()[(size_t) slot].isEmpty())
+        return "Pick a camera for this slot in the Slot tab first.";
+    if (slotRecording[(size_t) slot].load() || member->filmArmed.load())
+        return "This slot is already recording.";
+
+    std::shared_ptr<const SlotTimeline> tl;
+    {
+        const std::scoped_lock sl (timelineLock);
+        tl = timelines[(size_t) slot];
+    }
+    if (tl == nullptr)
+        return "Live has not reported this track's arrangement yet.";
+
+    const auto* clip = filmClip (*tl, file);
+    if (clip == nullptr)
+        return file < 0 ? "Click an audio clip on this track in Live first." : "That recording has no clip in the arrangement now.";
+    if (clip->file < 0 || (size_t) clip->file >= tl->files.size())
+        return "Live did not say which recording this clip plays.";
+    if (! clip->originKnown)
+        return "This clip loops past its loop end, so Griddy cannot tell where its recording starts. Film a clip that does not loop.";
+
+    const auto path = tl->files[(size_t) clip->file];
+    {
+        const std::scoped_lock sl (memberLock);
+        member->filmPath = juce::String (path);
+        member->filmName = fileTitle (path);
+        member->filmBorn = clip->fileBorn;
+        member->filmOrigin = clip->origin;
+        member->filmAsked = steadyNowSeconds();
+        member->filmSeen = false;
+        member->filmLive = false;
+        member->filmArmed = true;
+    }
+
+    if (! requestInLive (member, "film", clip->hostStart, clip->hostEnd))
+    {
+        member->filmArmed = false;
+        return "Could not ask Live to play the clip.";
+    }
+
+    log ("slot " + juce::String (slot + 1) + ": Film for " + fileTitle (path)
+         + juce::String::formatted (", the clip from %.3f to %.3f s%s", clip->hostStart, clip->hostEnd, clip->lane ? " on a take lane" : ""));
+    return {};
+}
+
+bool Hub::stopFilm (Member* member)
+{
+    if (member == nullptr || ! member->filmArmed.load())
+        return false;
+
+    // The take ends now; Live stops a moment later.
+    member->filmArmed = false;
+    member->filmLive = false;
+    requestInLive (member, "filmstop");
+    return true;
+}
+
+juce::var Hub::filmToVar (const Member* member) const
+{
+    auto o = std::make_unique<juce::DynamicObject>();
+    const auto slot = member != nullptr ? member->slot.load() : -1;
+    const auto usable = member != nullptr && ! member->isMaster.load() && liveScript.load() && juce::isPositiveAndBelow (slot, maxSlots);
+    o->setProperty ("available", usable);
+    o->setProperty ("armed", member != nullptr && member->filmArmed.load());
+    o->setProperty ("filming", usable && (filmingMask.load() & (1u << slot)) != 0);
+    if (! usable)
+        return juce::var (o.release());
+
+    std::shared_ptr<const SlotTimeline> tl;
+    {
+        const std::scoped_lock sl (timelineLock);
+        tl = timelines[(size_t) slot];
+    }
+
+    std::vector<SyncController::FileBinding> bindings;
+    {
+        const std::scoped_lock sl (engineLock);
+        if (engine != nullptr && slot < engine->numSlots())
+            bindings = engine->controller (slot).currentBindings();
+    }
+
+    auto videoOf = [&] (int file) -> juce::String
+    {
+        for (const auto& b : bindings)
+            if (b.file == file)
+                return b.film ? "filmed" : "video";
+        return "none";
+    };
+
+    juce::Array<juce::var> recordings;
+    if (tl != nullptr)
+    {
+        for (size_t f = 0; f < tl->files.size(); ++f)
+        {
+            const auto* clip = filmClip (*tl, (int) f);
+            if (clip == nullptr)
+                continue;
+            auto r = std::make_unique<juce::DynamicObject>();
+            r->setProperty ("file", (int) f);
+            r->setProperty ("name", fileTitle (tl->files[f]));
+            r->setProperty ("lane", clip->lane);
+            r->setProperty ("start", clip->hostStart);
+            r->setProperty ("loops", ! clip->originKnown);
+            r->setProperty ("video", videoOf ((int) f));
+            recordings.add (juce::var (r.release()));
+        }
+
+        if (const auto* chosen = filmClip (*tl, -1); chosen != nullptr && chosen->file >= 0 && (size_t) chosen->file < tl->files.size())
+        {
+            auto c = std::make_unique<juce::DynamicObject>();
+            c->setProperty ("file", chosen->file);
+            c->setProperty ("name", fileTitle (tl->files[(size_t) chosen->file]));
+            c->setProperty ("bar", chosen->bar);
+            c->setProperty ("lane", chosen->lane);
+            c->setProperty ("loops", ! chosen->originKnown);
+            c->setProperty ("video", videoOf (chosen->file));
+            o->setProperty ("selected", juce::var (c.release()));
+        }
+    }
+    o->setProperty ("recordings", recordings);
+
+    {
+        const std::scoped_lock sl (memberLock);
+        o->setProperty ("name", member->filmName);
+    }
+    return juce::var (o.release());
 }
 
 std::array<float, 9> Hub::slotLevels() const
@@ -1796,6 +2013,7 @@ juce::var Hub::getStatus (const Member* member) const
     obj->setProperty ("recordHint", hint);
     obj->setProperty ("hostRecording", member != nullptr && member->hostRecording.load());
     obj->setProperty ("liveScript", liveScript.load());
+    obj->setProperty ("film", filmToVar (member));
     obj->setProperty ("claimedMask", (int) claimedMask.load());
     obj->setProperty ("master", member != nullptr && member->isMaster.load());
     obj->setProperty ("layout", layoutToVar());
@@ -1837,6 +2055,7 @@ juce::var Hub::getStatus (const Member* member) const
                 o->setProperty ("slot", s);
                 o->setProperty ("claimed", (claimedMask.load() & (1u << s)) != 0);
                 o->setProperty ("recording", slotRecording[(size_t) s].load());
+                o->setProperty ("filming", filmingMask.load() & (1u << s) ? true : false);
                 o->setProperty ("recordStartPpq", recordStartPpq[(size_t) s].load());
                 o->setProperty ("trackName", names[(size_t) s]);
                 o->setProperty ("armed", ((armedMask.load() >> s) & 1u) != 0);

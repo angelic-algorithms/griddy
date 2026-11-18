@@ -113,11 +113,13 @@ For a lane clip, Griddy says "Audition this lane (T) to hear it". The film lines
 
 **Lining up.** The take stores which file it was filmed against (path, creation time, length) and where in that file
 it starts (`filmedFor` in take.json). Every clip of that file then shows the film take at the matching place, to the
-sample, by path. The output latency the host reports is taken off, since you play along to what comes out of the
-speakers. The rest is the slip control, as for any take.
+sample, by path. You play along to what comes out of the speakers, which is later than Griddy sees the sound by Live's
+output latency (often 5 to 15 ms). A plugin is not told that latency, so it is not taken off: the slip control is
+there for it, as for any take.
 
-**Several videos for one file.** The newest kept or reviewed film take of a file is its video; older ones stay in
-history and can be restored. Where the film does not cover the file (filmed only part of it), the video the file had
+**Several videos for one file.** The film take kept or in review is the file's video, else the newest film take of
+that file (keeping a take of another recording archives the film take, and the film stays). Older ones stay in history,
+and Restore makes one the video again. Where the film does not cover the file (filmed only part of it), the video the file had
 before shows, the take recorded with it, or black where there was none.
 
 | Case | Before | During | After |

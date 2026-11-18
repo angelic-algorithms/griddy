@@ -9,6 +9,7 @@
 #include <atomic>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <vector>
 
 namespace griddy
@@ -71,6 +72,13 @@ struct TakeProfile
 
     /** When recording began, seconds since the epoch: tells apart takes that started at the same host time. */
     double createdAt = 0.0;
+
+    /** A film take: filmed later, while Live played a recording that was already there. Empty for a take recorded with
+        its sound. It is that file's video wherever the file plays, found by path, not by where the take started. */
+    std::string filmPath;
+    double filmBorn = 0.0;   // the file's creation time, to find it again when its path changed
+    double filmLead = 0.0;   // seconds into the file where the take's second 0 is
+    bool filmCurrent = false; // kept or in review: chosen over the file's other film takes
 };
 
 /** One clip on a Griddy track in Live's arrangement, as the Live script reports it. Host seconds throughout. */
@@ -83,12 +91,15 @@ struct TimelineClip
     bool originKnown = false;
     double origin = 0.0;    // host time where the file's first sample would sit; unknown for a looped clip
     double fileBorn = 0.0;  // when the file was created, seconds since the epoch; 0 when unknown
+    bool selected = false;  // the clip clicked in Live: Griddy's Film films for its file
+    int bar = 0;            // the bar the clip starts in, 1 based, when selected
 };
 
 /** Every clip on one slot's track, with what the whole track does. */
 struct SlotTimeline
 {
     std::vector<TimelineClip> clips;
+    std::vector<std::string> files; // each file number's path, from a script that says; empty from an older one
     bool audible = true;     // the track is not muted, and not silenced by another track's solo
     bool arrangement = true; // the track plays the arrangement, not a Session clip
 };
@@ -115,8 +126,17 @@ public:
     void setTimeline (std::shared_ptr<const SlotTimeline> t);
 
     /** Which take a recorded file is. Worked out from where the file's clips sit and when it was created. */
-    struct FileBinding { int file = -1; int32_t takeId = -1; double lead = 0.0; bool leadKnown = false; };
+    struct FileBinding
+    {
+        int file = -1; int32_t takeId = -1; double lead = 0.0; bool leadKnown = false;
+        bool film = false; // takeId is a film take, bound by the file's path
+        // For a film take: the take bound by time, shown where the film does not cover the file; -1 for none (black).
+        int32_t underTakeId = -1; double underLead = 0.0; bool underLeadKnown = false;
+    };
     static std::vector<FileBinding> bindFiles (const SlotTimeline& t, const std::vector<TakeProfile>& takes);
+
+    /** The bindings last worked out, for showing which recordings have a video. Any thread. */
+    std::vector<FileBinding> currentBindings() const;
 
     /** Computes the target for this moment. wallNow is steadyNowSeconds(). */
     SlotTarget update (double wallNow);
@@ -162,6 +182,8 @@ private:
     bool timelineChanged = false;                 // guarded by takeLock
     std::shared_ptr<const SlotTimeline> localTimeline;
     std::vector<FileBinding> bindings;
+    mutable std::mutex bindingsLock;
+    std::vector<FileBinding> publishedBindings;
 
     Placement placement;
     uint32_t lastEmbeddedSerial = 0, lastFingerprintSerial = 0;

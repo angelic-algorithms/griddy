@@ -151,6 +151,10 @@ void PlaybackEngine::reloadSlot (int slot)
         p.recordedBpm = e.meta.bpm;
         p.createdAt = e.meta.createdAt;
         p.envelope = std::make_shared<const std::vector<float>> (e.meta.envelope);
+        p.filmPath = e.meta.filmPath.toStdString();
+        p.filmBorn = e.meta.filmBorn;
+        p.filmLead = e.meta.filmLead;
+        p.filmCurrent = e.meta.state == TakeMeta::State::kept || e.meta.state == TakeMeta::State::review;
         p.hasSound = std::any_of (e.meta.envelope.begin(), e.meta.envelope.end(), [] (float v) { return v >= 1.0e-4f; });
 
         // Every recorded pass of the take, where it sat on the host timeline: what comp detection compares against.
