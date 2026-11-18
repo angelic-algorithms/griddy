@@ -25,7 +25,7 @@ juce::String liveRequestsJson (const std::vector<LiveRequest>& requests)
     for (const auto& r : requests)
     {
         auto* o = new juce::DynamicObject();
-        o->setProperty ("id", r.id);
+        o->setProperty ("id", (juce::int64) r.id);
         o->setProperty ("slot", r.slot + 1);
         o->setProperty ("track", r.track);
         o->setProperty ("action", r.action);

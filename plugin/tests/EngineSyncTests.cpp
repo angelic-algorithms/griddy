@@ -620,7 +620,7 @@ struct LiveTimelineTests : juce::UnitTest
             if (list != nullptr && list->size() == 1)
             {
                 const auto& x = list->getReference (0);
-                expect ((int64_t) x.getProperty ("id", 0) == r.id);
+                expect ((juce::int64) x.getProperty ("id", 0) == (juce::int64) r.id);
                 expectEquals ((int) x.getProperty ("slot", 0), 3); // 1 based, as Griddy's Slot parameter shows it
                 expectEquals (x.getProperty ("track", {}).toString(), juce::String ("Vox"));
                 expectEquals (x.getProperty ("action", {}).toString(), juce::String ("record"));
