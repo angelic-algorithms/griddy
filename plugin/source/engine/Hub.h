@@ -12,6 +12,7 @@
 
 #include <array>
 #include <atomic>
+#include <deque>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -52,7 +53,7 @@ struct MemberControls
 /** One plugin instance as the hub sees it. Created and destroyed by Hub, used by that instance's threads. */
 struct Member
 {
-    explicit Member (MemberControls c) : controls (c) {}
+    explicit Member (MemberControls c) : controls (c) { history.resize (historySize); }
 
     MemberControls controls;
     std::atomic<int> slot { -1 };
@@ -87,8 +88,21 @@ struct Member
     std::atomic<double> requestPpq { 0.0 }, requestBpm { 120.0 };
     std::atomic<int> requestNum { 4 }, requestDen { 4 };
 
+    // Audio thread only: the last second or so of what this track heard, so a take can begin where Live's recording
+    // began, before Griddy heard that Live records. A ring indexed by host sample.
+    static constexpr int64_t historySize = 1 << 18; // about 1.4 s at 192 kHz, 5.9 s at 44.1 kHz
+    std::vector<float> history;
+    int64_t historyEnd = -1;   // host sample just after the newest one kept
+    int64_t historyCount = 0;
+    int32_t fedTake = -1;      // the take whose audio this thread has begun feeding
+
+    // Control thread -> audio thread: the host sample the take being started begins at, or -1 for "now".
+    std::atomic<int64_t> takeFrom { -1 };
+
     // Control thread only.
     bool recording = false;
+    double wantSince = -1.0;   // steadyNowSeconds() when this take was first wanted, while its start waits on Live
+    bool startLogged = false;
     std::atomic<bool> isMaster { false };
     int pendingMasterParam = -1;
     bool masterQueued = false;
@@ -259,7 +273,8 @@ private:
     std::array<std::atomic<bool>, maxSlots> slotRecording;
     std::array<std::atomic<double>, maxSlots> recordStartPpq {};
     std::atomic<uint32_t> liveArmedMask { 0 }; // slots whose track Live has armed, from the Live script; display only
-    std::atomic<uint32_t> playingMask { 0 };   // slots whose instance's host is playing
+    std::atomic<uint32_t> fileArmedMask { 0 }; // slots whose track Live has armed, from the arrangement file (any set)
+    std::atomic<uint32_t> loggedLiveArmed { 0 }; // hub thread: the Live arm last logged
     std::atomic<bool> liveScript { false };    // the Live script's arrangement file is fresh; then Live owns the arm
     std::atomic<uint32_t> armedMask { 0 }; // slots whose track is armed, worked out with the claims // where the take in progress began, for the takes timeline
     std::array<std::atomic<bool>, maxSlots> resetRequested;
@@ -294,6 +309,14 @@ private:
     juce::Time timelineModified;
     std::array<std::shared_ptr<const SlotTimeline>, maxSlots> timelines;
     const PlaybackEngine* timelineEngine = nullptr;
+
+    // Hub thread only: where each slot's recording began in Live (beats), from the arrangement file.
+    std::array<const LiveTimelineTrack*, maxSlots> slotTracks {}; // into liveTimeline, until the next read
+    std::array<bool, maxSlots> recordFromKnown {};
+    std::array<double, maxSlots> recordFrom {};
+    // Hub thread only: the last second of camera frames of each slot armed in Live, for a take that starts back there.
+    std::array<std::deque<std::shared_ptr<const VideoFrame>>, maxSlots> recentFrames;
+    void readLiveFile();
 
     // Presses for the Live script; message thread only.
     std::vector<LiveRequest> liveRequests;

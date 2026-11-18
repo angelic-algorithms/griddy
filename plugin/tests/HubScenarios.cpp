@@ -90,9 +90,14 @@ struct FakeDaw final : juce::Thread
 /** Points every Hub at a test folder for as long as it lives, so no scenario ever touches real takes in ~/Movies/Griddy. */
 struct ScopedTakesFolder
 {
-    explicit ScopedTakesFolder (const juce::File& f) : previous (juce::SystemStats::getEnvironmentVariable ("GRIDDY_TAKES_FOLDER", {}))
+    explicit ScopedTakesFolder (const juce::File& f)
+        : previous (juce::SystemStats::getEnvironmentVariable ("GRIDDY_TAKES_FOLDER", {})),
+          previousLive (juce::SystemStats::getEnvironmentVariable ("GRIDDY_LIVE_FOLDER", {}))
     {
         setenv ("GRIDDY_TAKES_FOLDER", f.getFullPathName().toRawUTF8(), 1);
+        // And the Live script's files, so a Live running on this machine never changes a scenario.
+        f.getChildFile ("Live").createDirectory();
+        setenv ("GRIDDY_LIVE_FOLDER", f.getChildFile ("Live").getFullPathName().toRawUTF8(), 1);
     }
 
     ~ScopedTakesFolder()
@@ -101,9 +106,13 @@ struct ScopedTakesFolder
             unsetenv ("GRIDDY_TAKES_FOLDER");
         else
             setenv ("GRIDDY_TAKES_FOLDER", previous.toRawUTF8(), 1);
+        if (previousLive.isEmpty())
+            unsetenv ("GRIDDY_LIVE_FOLDER");
+        else
+            setenv ("GRIDDY_LIVE_FOLDER", previousLive.toRawUTF8(), 1);
     }
 
-    juce::String previous;
+    juce::String previous, previousLive;
 };
 
 void pump (double seconds)
@@ -481,4 +490,103 @@ void hubUiStatus (const Report& report)
     report.check (layout.getProperty ("presetId", {}).toString() == "1p2" && layout.getProperty ("cells", {}).size() == 3, "the grid is 1+2");
 }
 
+// The Live script's side of a recording, as on 18 November: a set saved before Griddy had its "Track armed in Live"
+// parameter, so Live's arm reaches Griddy only through the arrangement file, and Live records before Griddy hears
+// of it. Each take must start where Live's recording did.
+void hubLiveRecordStart (const Report& report)
+{
+    HubWorld w (report);
+    auto& one = *w.instances[0];
+    const auto file = liveTimelineFile();
+
+    // What the script writes: slot 1's track, armed or not, and where its recording began (beats) while Live records.
+    auto writeLive = [&] (bool armed, bool recording, double recordFrom)
+    {
+        juce::String track = "{\"name\":\"1-Audio\",\"slot\":\"1\",\"armed\":" + juce::String (armed ? "true" : "false")
+                           + ",\"audible\":true,\"arrangement\":true,\"clips\":[]"
+                           + (recordFrom >= 0.0 ? ",\"recordFrom\":" + juce::String (recordFrom, 6) : juce::String()) + "}";
+        file.replaceWithText ("{\"version\":1,\"written\":" + juce::String ((double) juce::Time::currentTimeMillis() / 1000.0, 3)
+                              + ",\"recording\":" + (recording ? "true" : "false") + ",\"tracks\":[" + track + "]}");
+    };
+    auto takeStart = [&]
+    {
+        const auto takes = w.hub->getStatus (one.member).getProperty ("takes", {})[0];
+        return takes.size() > 0 ? (double) takes[0].getProperty ("startPpq", -1.0) : -1.0;
+    };
+    auto takeCount = [&] { return w.hub->getStatus (one.member).getProperty ("takes", {})[0].size(); };
+    const auto beatNow = [&] { return (double) w.daw->position.load() / 44100.0 * 2.0; };
+
+    writeLive (false, false, -1.0);
+    pump (0.5);
+    report.check (w.hub->liveScriptRunning(), "the arrangement file says the Live script runs");
+    report.check (! (bool) w.hub->getStatus (one.member).getProperty ("slots", {})[0].getProperty ("liveArmed", false), "not armed in Live");
+    writeLive (true, false, -1.0);
+    pump (0.3);
+    report.check ((bool) w.hub->getStatus (one.member).getProperty ("slots", {})[0].getProperty ("liveArmed", false),
+                  "armed in Live reaches Griddy through the file, in a set without the Track armed in Live parameter");
+
+    // Punch in while Live plays: Live records from the press, Griddy's arm comes 0.15 s later.
+    w.daw->tone = 0.3f;
+    w.daw->playFrom (0);
+    pump (1.0);
+    const auto pressed = beatNow();
+    writeLive (true, true, pressed);
+    pump (0.15);
+    one.arm = 1.0f;
+    pump (1.5);
+    report.check (w.hub->isSlotRecording (0), "Griddy records with Live");
+    one.arm = 0.0f;
+    writeLive (true, false, -1.0);
+    pump (2.0);
+    const auto start = takeStart();
+    report.check (std::abs (start - pressed) < 0.03, "the take starts where Live's recording did, not when Griddy heard ("
+                  + juce::String ((start - pressed) * 500.0, 1) + " ms off)");
+
+    // And its picture starts there too: the frames Griddy kept while it had not heard yet are in the take.
+    {
+        juce::File newest;
+        for (const auto& f : w.root.findChildFiles (juce::File::findFiles, true, "take.json"))
+            if (newest == juce::File() || f.getLastModificationTime() > newest.getLastModificationTime())
+                newest = f;
+        const auto meta = juce::JSON::parse (newest.loadFileAsString());
+        const auto* times = meta.getProperty ("frameTimes", {}).getArray();
+        const auto first = times != nullptr && ! times->isEmpty() ? (double) times->getFirst() : 99.0;
+        report.check (first < 0.1, "the take's first frame is from where Live's recording began ("
+                      + juce::String ((int) std::lround (first * 1000.0)) + " ms in)");
+    }
+
+    // Griddy armed before Live's punch in point: the take waits for it.
+    const auto before = takeCount();
+    w.daw->stop();
+    pump (0.3);
+    w.daw->playFrom (44100 * 3); // beat 6
+    writeLive (true, true, 8.0);
+    one.arm = 1.0f;
+    pump (0.6);
+    report.check (! w.hub->isSlotRecording (0), "before Live's recording starts, Griddy waits");
+    pump (1.6);
+    report.check (w.hub->isSlotRecording (0), "and records from it");
+    one.arm = 0.0f;
+    writeLive (true, false, -1.0);
+    w.daw->stop();
+    pump (2.0);
+    report.check (takeCount() == before + 1 && std::abs (takeStart() - 8.0) < 0.03,
+                  "one take, starting at the punch in point (" + juce::String ((takeStart() - 8.0) * 500.0, 1) + " ms off)");
+
+    // A script that does not say where the recording began: the take starts as it always did, when Griddy hears.
+    w.daw->playFrom (0);
+    pump (0.5);
+    writeLive (true, true, -1.0);
+    const auto heard = beatNow();
+    one.arm = 1.0f;
+    pump (1.5);
+    one.arm = 0.0f;
+    writeLive (true, false, -1.0);
+    w.daw->stop();
+    pump (2.0);
+    report.check (std::abs (takeStart() - heard) < 0.2, "with no start in the file, the take starts when Griddy heard ("
+                  + juce::String ((takeStart() - heard) * 500.0, 1) + " ms off)");
+}
+
 } // namespace griddy::harness
+

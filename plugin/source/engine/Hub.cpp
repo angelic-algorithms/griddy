@@ -162,7 +162,7 @@ void Hub::settleSlots()
     std::vector<Show> toShow;
     {
         const std::scoped_lock sl (memberLock);
-        uint32_t mask = 0, armed = 0, liveArmed = 0, playing = 0;
+        uint32_t mask = 0, armed = 0, liveArmed = fileArmedMask.load();
         int minSlot = maxSlots;
         Member* lead = nullptr;
         int cameras = 1;
@@ -253,8 +253,6 @@ void Hub::settleSlots()
                     armed |= 1u << s;
                 if (! m->isMaster && m->controls.trackArmed != nullptr && m->controls.trackArmed->load() > 0.5f)
                     liveArmed |= 1u << s;
-                if (m->playing.load())
-                    playing |= 1u << s;
                 if (s < minSlot)
                 {
                     minSlot = s;
@@ -269,8 +267,17 @@ void Hub::settleSlots()
 
         claimedMask = mask;
         armedMask = armed;
+        // Live's arm comes from the script's parameter, or from its arrangement file in a set saved before that
+        // parameter existed (Live only shows a plugin the parameters it had when the set was saved).
+        liveArmed &= mask;
+        if (liveArmed != loggedLiveArmed.load())
+        {
+            const auto was = loggedLiveArmed.exchange (liveArmed);
+            for (int s = 0; s < maxSlots; ++s)
+                if (((was ^ liveArmed) >> s) & 1u)
+                    log ("slot " + juce::String (s + 1) + ": " + (((liveArmed >> s) & 1u) ? "armed" : "disarmed") + " in Live");
+        }
         liveArmedMask = liveArmed;
-        playingMask = playing;
         leader = lead;
         activeSlots = juce::jlimit (1, maxSlots, cameras);
     }
@@ -703,7 +710,38 @@ void Hub::processBlock (Member& member, const juce::AudioBuffer<float>& buffer, 
         e->feedSlotAudio (slot, mono, n, host, t.isPlaying);
 
         if (want && recorder != nullptr && recorder->isRecording())
+        {
+            // A take's first block: first the history back to where it starts, if that is earlier.
+            if (const auto take = recorder->currentTakeId(); member.fedTake != take)
+            {
+                member.fedTake = take;
+                const auto from = member.takeFrom.load (std::memory_order_acquire);
+                const auto oldest = member.historyEnd - member.historyCount;
+                if (from >= 0 && from < host && member.historyEnd == host && from >= oldest)
+                {
+                    const auto wallNow = steadyNowSeconds();
+                    float back[512];
+                    for (auto h = from; h < host;)
+                    {
+                        const auto k = (int) juce::jmin<int64_t> (512, host - h);
+                        for (int i = 0; i < k; ++i)
+                            back[i] = member.history[(size_t) ((h + i) & (Member::historySize - 1))];
+                        recorder->feedAudio (back, k, h, wallNow - (double) (host - h) / sampleRate);
+                        h += k;
+                    }
+                }
+            }
+
             recorder->feedAudio (mono, n, host);
+        }
+
+        // Keep the history: a jump in the host position (a loop, a new start) begins it again.
+        if (member.historyEnd != host)
+            member.historyCount = 0;
+        for (int i = 0; i < n; ++i)
+            member.history[(size_t) ((host + i) & (Member::historySize - 1))] = mono[i];
+        member.historyEnd = host + n;
+        member.historyCount = juce::jmin<int64_t> (member.historyCount + n, Member::historySize);
 
         // Slots nobody owns follow the host position. One writer per slot, so only the leader does this.
         if (isLeader)
@@ -903,6 +941,7 @@ void Hub::controlTick()
         e = engine.get();
     }
 
+    readLiveFile();
     settleSlots();
 
     // A folder chosen during a take moves over once nothing is recording, before the next take can start.
@@ -947,13 +986,67 @@ void Hub::controlTick()
                 continue;
 
             const auto want = m.wantRecording.load (std::memory_order_acquire);
+            const auto script = liveScript.load();
+
+            // While Live has the track armed, keep its last second of camera frames: Griddy hears that Live records a
+            // tenth of a second or so after it starts, and the take starts back where Live's recording did.
+            auto& recent = recentFrames[(size_t) slot];
+            if (! m.recording && script && ((liveArmedMask.load() >> slot) & 1u) != 0)
+            {
+                if (auto f = videoEngine.latestFrame (slot); f != nullptr && (recent.empty() || recent.back()->serial != f->serial))
+                    recent.push_back (std::move (f));
+                const auto oldest = steadyNowSeconds() - 1.0;
+                while (! recent.empty() && recent.front()->captureTimeSeconds < oldest)
+                    recent.pop_front();
+            }
+            else if (! m.recording)
+                recent.clear();
+
+            if (! want)
+                m.wantSince = -1.0;
 
             if (want && ! m.recording && ! slotBusy[(size_t) slot].load())
             {
+                auto from = m.requestSample.load();
+                auto fromPpq = m.requestPpq.load();
+                const auto bpm = juce::jmax (1.0, m.requestBpm.load());
+                const auto samplesPerBeat = sampleRate * 60.0 / bpm;
+
+                if (script)
+                {
+                    // Start where Live's recording of this track began: earlier, from the history, when Griddy heard
+                    // late; later, when Live counts in or punches in. Wait a moment for the file to say where.
+                    const auto now = steadyNowSeconds();
+                    if (m.wantSince < 0.0)
+                        m.wantSince = now;
+
+                    if (recordFromKnown[(size_t) slot])
+                    {
+                        const auto rf = recordFrom[(size_t) slot];
+                        if (m.hostPpq.load() < rf - 1.0e-6)
+                            continue; // Live has not reached the point its recording starts at
+
+                        from = m.requestSample.load() + (int64_t) std::llround ((rf - fromPpq) * samplesPerBeat);
+                        fromPpq = rf;
+                    }
+                    else if (now - m.wantSince < 0.3)
+                        continue;
+                    else
+                        log ("slot " + juce::String (slot + 1) + ": Live's arrangement file gave no recording start; the take starts when Griddy heard");
+
+                    // Never further back than the history holds, nor later than now.
+                    const auto hostNow = m.hostSample.load();
+                    from = juce::jlimit (hostNow - (int64_t) (0.9 * sampleRate), juce::jmax (hostNow, m.requestSample.load()), from);
+                    fromPpq = m.requestPpq.load() + (double) (from - m.requestSample.load()) / samplesPerBeat;
+                    m.takeFrom = from;
+                }
+                else
+                    m.takeFrom = -1;
+
                 TakeMeta meta;
                 meta.sampleRate = sampleRate;
-                meta.startHostSample = m.requestSample.load();
-                meta.startPpq = m.requestPpq.load();
+                meta.startHostSample = from;
+                meta.startPpq = fromPpq;
                 meta.bpm = m.requestBpm.load();
                 meta.timeSigNumerator = m.requestNum.load();
                 meta.timeSigDenominator = m.requestDen.load();
@@ -965,10 +1058,22 @@ void Hub::controlTick()
 
                 if (r->start (slot, meta, cfg))
                 {
+                    const auto back = (double) (m.hostSample.load() - from) / sampleRate;
                     log ("slot " + juce::String (slot + 1) + ": take " + juce::String (r->currentTakeId()) + " starts at sample "
-                         + juce::String (meta.startHostSample));
+                         + juce::String (meta.startHostSample)
+                         + (script ? juce::String::formatted (", where Live's recording began, %.3f s before now", back) : juce::String()));
                     m.recording = true;
                     m.lastCameraSerial = 0;
+
+                    // The frames since Live's recording began, from the history; then the live ones as usual.
+                    const auto fromWall = steadyNowSeconds() - back - 0.5 / juce::jmax (1.0, cfg.fps);
+                    for (const auto& f : recent)
+                        if (script && f->captureTimeSeconds >= fromWall)
+                        {
+                            r->pushFrame (f->image, f->captureTimeSeconds);
+                            m.lastCameraSerial = (uint64_t) f->serial;
+                        }
+                    recent.clear();
                     recordStartPpq[(size_t) slot] = meta.startPpq;
                     slotRecording[(size_t) slot] = true;
                 }
@@ -1384,13 +1489,12 @@ void Hub::drawPreview()
 
     compositor.render (output, cells, [&] (int slot) -> std::shared_ptr<const VideoFrame>
     {
-        // Recording shows the live camera, and so does a slot armed for a new take with none waiting in review: armed
-        // by Griddy, or armed in Live while Live is stopped (like Live's auto monitoring, which plays the clips while
-        // Live plays). Others show their take, or the live camera if they have none. The tile overlay uses the same rule.
+        // Recording shows the live camera, and so does a slot armed for a new take with none waiting in review, armed
+        // by Griddy or in Live. Others show their take, or the live camera if they have none. The tile overlay uses
+        // the same rule.
         const auto bit = 1u << slot;
         if (slotRecording[(size_t) slot].load()
-            || (! e->slotHasReview (slot)
-                && ((armedMask.load() & bit) != 0 || ((liveArmedMask.load() & bit) != 0 && (playingMask.load() & bit) == 0))))
+            || (! e->slotHasReview (slot) && ((armedMask.load() | liveArmedMask.load()) & bit) != 0))
             return videoEngine.latestFrame (slot);
 
         if (const auto shown = e->shown (slot); shown != nullptr && shown->frame != nullptr)
@@ -1448,15 +1552,15 @@ static const char* statusName (SyncStatus s)
     return "noTake";
 }
 
-void Hub::updateTimeline (PlaybackEngine& e)
+void Hub::readLiveFile()
 {
-    // The Live script rewrites its file every second; one older than a few seconds means Live or the script stopped.
+    // The Live script rewrites its file every second and at once on any change; one older than a few seconds means
+    // Live or the script stopped. Read every control tick, so a recording's start in Live is known within a few ms.
     const auto file = liveTimelineFile();
     const auto modified = file.getLastModificationTime();
     const auto now = (double) juce::Time::currentTimeMillis() / 1000.0;
-    const auto changed = modified != timelineModified || &e != timelineEngine;
 
-    if (changed && file.existsAsFile())
+    if (modified != timelineModified && file.existsAsFile())
     {
         timelineModified = modified;
         LiveTimeline parsed;
@@ -1482,9 +1586,10 @@ void Hub::updateTimeline (PlaybackEngine& e)
             }
     }
 
-    for (int s = 0; s < e.numSlots() && s < maxSlots; ++s)
+    // The track whose Griddy shows each slot; by name when the script could not read the slot.
+    uint32_t armed = 0;
+    for (int s = 0; s < maxSlots; ++s)
     {
-        // The track whose Griddy shows this slot; by name when the script could not read the slot.
         const LiveTimelineTrack* track = nullptr;
         if (fresh && ((mine >> s) & 1u) != 0)
         {
@@ -1496,6 +1601,22 @@ void Hub::updateTimeline (PlaybackEngine& e)
                     if (t.slot < 0 && t.name == names[(size_t) s])
                         track = &t;
         }
+
+        slotTracks[(size_t) s] = track;
+        if (track != nullptr && track->armed == 1)
+            armed |= 1u << s;
+        recordFromKnown[(size_t) s] = track != nullptr && track->recordFromKnown;
+        recordFrom[(size_t) s] = track != nullptr ? track->recordFrom : 0.0;
+    }
+
+    fileArmedMask = armed;
+}
+
+void Hub::updateTimeline (PlaybackEngine& e)
+{
+    for (int s = 0; s < e.numSlots() && s < maxSlots; ++s)
+    {
+        const auto* track = slotTracks[(size_t) s];
 
         auto& had = timelines[(size_t) s];
         const auto same = track == nullptr ? had == nullptr : (had != nullptr && *had == track->timeline);

@@ -5,6 +5,10 @@ namespace griddy
 
 juce::File liveTimelineFile()
 {
+    // Tests point this elsewhere, so they never read or write what a running Live wrote.
+    if (const auto folder = juce::SystemStats::getEnvironmentVariable ("GRIDDY_LIVE_FOLDER", {}); folder.isNotEmpty())
+        return juce::File (folder).getChildFile ("live-timeline.json");
+
    #if JUCE_MAC
     return juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
         .getChildFile ("Application Support").getChildFile ("Griddy").getChildFile ("live-timeline.json");
@@ -47,6 +51,7 @@ bool parseLiveTimeline (const juce::String& json, LiveTimeline& out)
 
     out = {};
     out.written = (double) v.getProperty ("written", 0.0);
+    out.recording = (bool) v.getProperty ("recording", false);
 
     if (const auto* tracks = v.getProperty ("tracks", {}).getArray())
         for (const auto& t : *tracks)
@@ -55,6 +60,11 @@ bool parseLiveTimeline (const juce::String& json, LiveTimeline& out)
             track.name = t.getProperty ("name", {}).toString();
             const auto slot = t.getProperty ("slot", {}).toString().trim().getIntValue();
             track.slot = slot >= 1 ? slot - 1 : -1;
+            const auto armed = t.getProperty ("armed", {});
+            track.armed = armed.isBool() || armed.isInt() ? ((bool) armed ? 1 : 0) : -1;
+            const auto from = t.getProperty ("recordFrom", {});
+            track.recordFromKnown = from.isDouble() || from.isInt() || from.isInt64();
+            track.recordFrom = track.recordFromKnown ? (double) from : 0.0;
             track.timeline.audible = (bool) t.getProperty ("audible", true);
             track.timeline.arrangement = (bool) t.getProperty ("arrangement", true);
 

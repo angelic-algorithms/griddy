@@ -12,6 +12,9 @@ struct LiveTimelineTrack
 {
     int slot = -1;        // 0 based, from the Griddy's Slot parameter; -1 when it could not be read
     juce::String name;    // the track's name in Live
+    int armed = -1;       // Live has the track armed: 1 or 0, -1 from an older script that did not say
+    bool recordFromKnown = false;
+    double recordFrom = 0.0; // the beat this track's recording in Live began at, while Live records it
     SlotTimeline timeline;
 };
 
@@ -19,6 +22,7 @@ struct LiveTimelineTrack
 struct LiveTimeline
 {
     double written = 0.0; // seconds since the epoch; the script rewrites the file every second while Live runs
+    bool recording = false; // Live's record button (Arrangement or Session) is on
     std::vector<LiveTimelineTrack> tracks;
 };
 

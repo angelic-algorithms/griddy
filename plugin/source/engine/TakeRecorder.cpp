@@ -284,7 +284,7 @@ bool TakeRecorder::start (int slot, TakeMeta initial, const Config& cfg)
     return true;
 }
 
-void TakeRecorder::feedAudio (const float* mono, int numSamples, int64_t hostSample) noexcept
+void TakeRecorder::feedAudio (const float* mono, int numSamples, int64_t hostSample, double wallSeconds) noexcept
 {
     if (! recording.load (std::memory_order_relaxed))
         return;
@@ -292,7 +292,7 @@ void TakeRecorder::feedAudio (const float* mono, int numSamples, int64_t hostSam
     auto none = int64_t (-1);
     firstHost.compare_exchange_strong (none, hostSample, std::memory_order_relaxed);
     audioRing.write (mono, (size_t) numSamples);
-    Stamp s { steadyNowSeconds(), hostSample, (int32_t) numSamples };
+    Stamp s { wallSeconds >= 0.0 ? wallSeconds : steadyNowSeconds(), hostSample, (int32_t) numSamples };
     stampRing.write (&s, 1);
 }
 
@@ -303,7 +303,8 @@ void TakeRecorder::pushFrame (juce::Image frame, double captureWallSeconds)
 
     const std::scoped_lock sl (frameLock);
 
-    if (frames.size() >= 12)
+    // Room for the second of history a take can start with, on top of the usual few frames in flight.
+    if (frames.size() >= 48)
     {
         frames.pop_front();
         ++droppedFrames;

@@ -45,8 +45,9 @@ public:
 
     bool start (int slot, TakeMeta initial, const Config& config);
 
-    /** Audio thread. hostSample is the host time of mono[0]. */
-    void feedAudio (const float* mono, int numSamples, int64_t hostSample) noexcept;
+    /** Audio thread. hostSample is the host time of mono[0]. wallSeconds is when it was heard, for audio from a
+        history fed late; by default now. */
+    void feedAudio (const float* mono, int numSamples, int64_t hostSample, double wallSeconds = -1.0) noexcept;
 
     /** Camera thread. captureWallSeconds is steadyNowSeconds() at capture. */
     void pushFrame (juce::Image frame, double captureWallSeconds);
